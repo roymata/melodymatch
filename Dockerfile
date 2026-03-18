@@ -9,14 +9,14 @@ RUN npm run build
 # Stage 2: Python app with built frontend
 FROM python:3.12-slim
 
-# Install system deps + Node.js (needed by yt-dlp as JavaScript runtime)
+# Install system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
-    curl \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy Node.js binary from the build stage (yt-dlp needs it as JS runtime)
+COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /app
 

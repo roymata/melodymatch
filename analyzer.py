@@ -78,7 +78,7 @@ def _run_ytdlp(source: str, label: str) -> str:
         "--audio-format", "mp3",
         "--audio-quality", "192K",
         "--ffmpeg-location", _find_ffmpeg_dir(),
-        "--js-runtimes", "nodejs",
+        "--js-runtimes", "node",
         "--extractor-retries", "3",
         "--retry-sleep", "http:5",
         "-o", out_template,
