@@ -3,6 +3,24 @@ import type { ComparisonResult, CompareStatus, SearchQuery, MixedSongInput } fro
 
 const API_URL = import.meta.env.VITE_API_URL || "/api";
 
+/** Safely parse JSON, throw a readable error if response is HTML (e.g. timeout page). */
+async function safeJson(res: Response) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Server returned HTML (Render timeout/error page) instead of JSON
+    if (text.includes("<!DOCTYPE") || text.includes("<html")) {
+      throw new Error(
+        res.status === 504 || res.status === 502
+          ? "Request timed out — the server took too long. Try again in a moment."
+          : `Server error (${res.status}). The service may be waking up — please retry in 30 seconds.`
+      );
+    }
+    throw new Error(`Unexpected response: ${text.slice(0, 100)}`);
+  }
+}
+
 /** Build the mixed-endpoint payload for a single song. */
 function toMixedInput(search: SearchQuery): MixedSongInput {
   if (search.fallbackUrl?.trim()) {
@@ -33,7 +51,7 @@ export function useCompare() {
         body: form,
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
 
       if (!res.ok) {
         throw new Error(data.error || "Comparison failed");
@@ -65,7 +83,7 @@ export function useCompare() {
         }),
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
 
       if (!res.ok) {
         throw new Error(data.error || "Comparison failed");
