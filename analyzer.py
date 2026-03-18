@@ -57,77 +57,80 @@ def _find_ffmpeg_dir() -> str:
     return "/usr/bin"  # sensible default
 
 
-def download_youtube_audio(url: str) -> str:
-    """Download audio from a YouTube URL via yt-dlp."""
-    if not _YT_URL_RE.match(url):
-        raise ValueError("Invalid YouTube URL")
+def _run_ytdlp(source: str, label: str) -> str:
+    """Run yt-dlp to download audio from a URL or search query.
+
+    Includes retry logic for HTTP 429 (rate limiting) and uses Node.js
+    as the JavaScript runtime for YouTube's bot protection challenges.
+    Returns path to downloaded mp3 file.
+    """
+    import time
+    import shutil
 
     tmp_dir = tempfile.mkdtemp()
     out_template = os.path.join(tmp_dir, "audio.%(ext)s")
 
-    try:
-        subprocess.run(
-            [
-                _find_ytdlp(),
-                "--no-playlist",
-                "-f", "bestaudio/best",
-                "-x",
-                "--audio-format", "mp3",
-                "--audio-quality", "192K",
-                "--ffmpeg-location", _find_ffmpeg_dir(),
-                "-o", out_template,
-                url,
-            ],
-            check=True, capture_output=True, timeout=120,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"yt-dlp failed: {exc.stderr.decode(errors='replace')[:300]}")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("YouTube download timed out (120 s)")
+    cmd = [
+        _find_ytdlp(),
+        "--no-playlist",
+        "-f", "bestaudio/best",
+        "-x",
+        "--audio-format", "mp3",
+        "--audio-quality", "192K",
+        "--ffmpeg-location", _find_ffmpeg_dir(),
+        "--js-runtimes", "nodejs",
+        "--extractor-retries", "3",
+        "--retry-sleep", "http:5",
+        "-o", out_template,
+        source,
+    ]
 
-    mp3_path = os.path.join(tmp_dir, "audio.mp3")
-    if not os.path.isfile(mp3_path):
-        for f in os.listdir(tmp_dir):
-            return os.path.join(tmp_dir, f)
-        raise RuntimeError("Download produced no output file")
-    return mp3_path
+    max_retries = 2
+    last_error = ""
+
+    for attempt in range(max_retries + 1):
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=150)
+
+            mp3_path = os.path.join(tmp_dir, "audio.mp3")
+            if os.path.isfile(mp3_path):
+                return mp3_path
+            # yt-dlp may keep original extension
+            for f in os.listdir(tmp_dir):
+                return os.path.join(tmp_dir, f)
+            raise RuntimeError(f"No output file for '{label}'")
+
+        except subprocess.CalledProcessError as exc:
+            last_error = exc.stderr.decode(errors="replace")[:400]
+            if "429" in last_error and attempt < max_retries:
+                time.sleep(5 * (attempt + 1))  # back off: 5s, 10s
+                # Clean partial downloads
+                for f in os.listdir(tmp_dir):
+                    fp = os.path.join(tmp_dir, f)
+                    if os.path.isfile(fp):
+                        os.unlink(fp)
+                continue
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise RuntimeError(f"yt-dlp failed for '{label}': {last_error}")
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise RuntimeError(f"Download timed out for '{label}'")
+
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    raise RuntimeError(f"yt-dlp failed after retries for '{label}': {last_error}")
+
+
+def download_youtube_audio(url: str) -> str:
+    """Download audio from a YouTube URL via yt-dlp."""
+    if not _YT_URL_RE.match(url):
+        raise ValueError("Invalid YouTube URL")
+    return _run_ytdlp(url, url)
 
 
 def search_and_download_youtube(song_name: str, artist: str) -> str:
     """Search YouTube by name + artist, download the top result."""
     query = f"{song_name} {artist}"
-    tmp_dir = tempfile.mkdtemp()
-    out_template = os.path.join(tmp_dir, "audio.%(ext)s")
-
-    try:
-        subprocess.run(
-            [
-                _find_ytdlp(),
-                "--no-playlist",
-                "-f", "bestaudio/best",
-                "-x",
-                "--audio-format", "mp3",
-                "--audio-quality", "192K",
-                "--ffmpeg-location", _find_ffmpeg_dir(),
-                "-o", out_template,
-                f"ytsearch1:{query}",
-            ],
-            check=True, capture_output=True, timeout=120,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"YouTube search failed for '{query}': "
-            f"{exc.stderr.decode(errors='replace')[:300]}"
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"YouTube search/download timed out for '{query}'")
-
-    mp3_path = os.path.join(tmp_dir, "audio.mp3")
-    if not os.path.isfile(mp3_path):
-        for f in os.listdir(tmp_dir):
-            return os.path.join(tmp_dir, f)
-        raise RuntimeError(f"No results found for '{query}'")
-    return mp3_path
+    return _run_ytdlp(f"ytsearch1:{query}", query)
 
 
 # ---------------------------------------------------------------------------
