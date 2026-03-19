@@ -10,12 +10,8 @@ import tempfile
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
-from analyzer import (
-    extract_features,
-    compute_similarity,
-    download_youtube_audio,
-    search_and_download_youtube,
-)
+from analyzer import extract_features, compute_similarity
+from youtube import search_and_download, download_from_url
 
 # Serve built React app from /static (built during Docker build)
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -38,12 +34,12 @@ def _resolve_song(song: dict) -> str:
         url = (song.get("url") or "").strip()
         if not url:
             raise ValueError("URL is required when type is 'url'")
-        return download_youtube_audio(url)
+        return download_from_url(url)
     name = (song.get("name") or "").strip()
     artist = (song.get("artist") or "").strip()
     if not name or not artist:
         raise ValueError("Song name and artist are required for search")
-    return search_and_download_youtube(name, artist)
+    return search_and_download(name, artist)
 
 
 def _cleanup_paths(paths: list):

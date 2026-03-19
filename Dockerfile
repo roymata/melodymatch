@@ -9,21 +9,18 @@ RUN npm run build
 # Stage 2: Python app with built frontend
 FROM python:3.12-slim
 
-# Install system deps
+# Install system deps (ffmpeg for audio conversion)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-
-# Copy Node.js binary from the build stage (yt-dlp needs it as JS runtime)
-COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py analyzer.py ./
+COPY app.py analyzer.py youtube.py ./
 
 # Copy built React app into /app/static
 COPY --from=frontend-build /frontend/dist ./static/
