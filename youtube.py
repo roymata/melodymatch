@@ -1,25 +1,42 @@
-"""YouTube search and audio download via Piped API.
+"""YouTube search and audio download via Piped + Invidious APIs.
 
-Piped is a privacy-friendly YouTube proxy. Using its API means we never
-talk to YouTube directly, avoiding bot detection and 429 rate limits
-on datacenter IPs.
+Uses multiple YouTube proxy services as fallbacks so we never talk to
+YouTube directly — avoiding bot detection and 429 rate limits on
+datacenter IPs.
 
-Multiple Piped instances are tried as fallbacks for reliability.
+Fallback chain:
+  1. Piped API instances (search + stream)
+  2. Invidious API instances (search + stream)
 """
 
 import os
+import re
 import tempfile
 import subprocess
 import requests
 
+# Current working Piped API instances (updated March 2026)
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
+    "https://pipedapi-libre.kavin.rocks",
     "https://pipedapi.adminforge.de",
-    "https://api.piped.projectsegfau.lt",
-    "https://pipedapi.in.projectsegfau.lt",
+    "https://pipedapi.leptons.xyz",
+    "https://api.piped.yt",
+    "https://pipedapi.drgns.space",
+    "https://piped-api.privacy.com.de",
+    "https://pipedapi.nosebs.ru",
+    "https://pipedapi.darkness.services",
+    "https://pipedapi.ducks.party",
 ]
 
-_TIMEOUT = 30  # seconds per HTTP request
+# Invidious API instances as secondary fallback
+INVIDIOUS_INSTANCES = [
+    "https://inv.nadeko.net",
+    "https://yewtu.be",
+    "https://invidious.nerdvpn.de",
+]
+
+_TIMEOUT = 20  # seconds per HTTP request to each instance
 
 
 def _find_ffmpeg() -> str:
@@ -30,70 +47,140 @@ def _find_ffmpeg() -> str:
     return "ffmpeg"
 
 
-def _piped_get(path: str, params: dict = None) -> dict:
-    """Try each Piped instance until one responds."""
-    last_err = None
+# ---------------------------------------------------------------------------
+# Piped API helpers
+# ---------------------------------------------------------------------------
+
+def _piped_get(path: str, params: dict = None) -> dict | None:
+    """Try each Piped instance; return JSON or None if all fail."""
     for base in PIPED_INSTANCES:
         try:
             r = requests.get(f"{base}{path}", params=params, timeout=_TIMEOUT)
             if r.status_code == 200:
-                return r.json()
-        except Exception as e:
-            last_err = e
+                data = r.json()
+                if data:
+                    return data
+        except Exception:
             continue
-    raise RuntimeError(f"All Piped instances failed. Last error: {last_err}")
+    return None
 
 
-def search_youtube(query: str) -> dict:
-    """Search YouTube via Piped. Returns the top video result as {id, title, url}."""
+def _piped_search(query: str) -> str | None:
+    """Search via Piped, return video ID or None."""
     data = _piped_get("/search", {"q": query, "filter": "videos"})
+    if not data:
+        return None
 
-    items = data.get("items", [])
-    if not items:
-        raise RuntimeError(f"No YouTube results found for '{query}'")
-
-    # Pick the first video result
-    for item in items:
-        if item.get("url") and item.get("duration", 0) > 0:
-            video_id = item["url"].replace("/watch?v=", "")
-            return {
-                "id": video_id,
-                "title": item.get("title", query),
-                "url": f"https://youtube.com/watch?v={video_id}",
-            }
-
-    # Fallback to first item
-    item = items[0]
-    video_id = item["url"].replace("/watch?v=", "")
-    return {
-        "id": video_id,
-        "title": item.get("title", query),
-        "url": f"https://youtube.com/watch?v={video_id}",
-    }
+    for item in data.get("items", []):
+        url = item.get("url", "")
+        if url and item.get("duration", 0) > 0:
+            return url.replace("/watch?v=", "")
+    return None
 
 
-def get_audio_stream_url(video_id: str) -> str:
-    """Get the best audio stream URL for a video via Piped."""
+def _piped_audio_url(video_id: str) -> str | None:
+    """Get proxied audio stream URL via Piped, or None."""
     data = _piped_get(f"/streams/{video_id}")
+    if not data:
+        return None
 
     streams = data.get("audioStreams", [])
     if not streams:
-        raise RuntimeError(f"No audio streams found for video {video_id}")
+        return None
 
-    # Sort by bitrate descending, prefer m4a/mp4 (better ffmpeg compat)
+    # Sort by bitrate descending
     streams.sort(key=lambda s: s.get("bitrate", 0), reverse=True)
-
     for s in streams:
         if s.get("url"):
             return s["url"]
+    return None
 
-    raise RuntimeError(f"No usable audio stream URL for video {video_id}")
+
+# ---------------------------------------------------------------------------
+# Invidious API helpers (fallback)
+# ---------------------------------------------------------------------------
+
+def _invidious_get(path: str, params: dict = None) -> dict | list | None:
+    """Try each Invidious instance; return JSON or None."""
+    for base in INVIDIOUS_INSTANCES:
+        try:
+            r = requests.get(f"{base}/api/v1{path}", params=params, timeout=_TIMEOUT)
+            if r.status_code == 200:
+                data = r.json()
+                if data:
+                    return data
+        except Exception:
+            continue
+    return None
+
+
+def _invidious_search(query: str) -> str | None:
+    """Search via Invidious, return video ID or None."""
+    data = _invidious_get("/search", {"q": query, "type": "video"})
+    if not data or not isinstance(data, list):
+        return None
+
+    for item in data:
+        vid = item.get("videoId")
+        if vid and item.get("lengthSeconds", 0) > 0:
+            return vid
+    return None
+
+
+def _invidious_audio_url(video_id: str) -> str | None:
+    """Get audio stream URL via Invidious, or None."""
+    data = _invidious_get(f"/videos/{video_id}")
+    if not data:
+        return None
+
+    # Invidious provides adaptiveFormats with audio
+    for fmt in data.get("adaptiveFormats", []):
+        if fmt.get("type", "").startswith("audio/") and fmt.get("url"):
+            return fmt["url"]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Unified search and download
+# ---------------------------------------------------------------------------
+
+def search_video(query: str) -> str:
+    """Search YouTube for a query, return video ID. Tries Piped then Invidious."""
+    vid = _piped_search(query)
+    if vid:
+        return vid
+
+    vid = _invidious_search(query)
+    if vid:
+        return vid
+
+    raise RuntimeError(
+        f"Could not find '{query}' on YouTube. "
+        "All proxy instances are currently unavailable. Please try again later "
+        "or paste a direct YouTube URL instead."
+    )
+
+
+def get_audio_url(video_id: str) -> str:
+    """Get a downloadable audio URL for a video ID. Tries Piped then Invidious."""
+    url = _piped_audio_url(video_id)
+    if url:
+        return url
+
+    url = _invidious_audio_url(video_id)
+    if url:
+        return url
+
+    raise RuntimeError(
+        f"Could not get audio for video {video_id}. "
+        "All proxy instances failed. Please try again later."
+    )
 
 
 def download_audio(stream_url: str, output_path: str):
     """Download an audio stream URL and convert to mp3 via ffmpeg."""
-    # Download the raw audio stream
-    r = requests.get(stream_url, timeout=120, stream=True)
+    r = requests.get(stream_url, timeout=120, stream=True,
+                     headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
 
     raw_path = output_path + ".raw"
@@ -101,56 +188,45 @@ def download_audio(stream_url: str, output_path: str):
         for chunk in r.iter_content(chunk_size=65536):
             f.write(chunk)
 
-    # Convert to mp3 with ffmpeg
     try:
         subprocess.run(
             [_find_ffmpeg(), "-i", raw_path, "-vn", "-acodec", "libmp3lame",
-             "-ab", "192k", "-y", output_path],
+             "-ab", "192k", "-y", "-loglevel", "error", output_path],
             check=True, capture_output=True, timeout=60,
         )
     finally:
         if os.path.isfile(raw_path):
             os.unlink(raw_path)
 
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) < 1000:
+        raise RuntimeError("Audio conversion failed — output file is empty")
+
 
 def search_and_download(song_name: str, artist: str) -> str:
-    """Search YouTube for a song and download the audio as mp3.
+    """Search YouTube for a song and download audio as mp3.
 
-    Returns path to a temporary mp3 file. Caller must clean up.
+    Returns path to a temporary mp3 file. Caller must clean up the parent dir.
     """
     query = f"{song_name} {artist}"
+    video_id = search_video(query)
+    stream_url = get_audio_url(video_id)
 
-    # Step 1: Search
-    result = search_youtube(query)
-    video_id = result["id"]
-
-    # Step 2: Get audio stream URL
-    stream_url = get_audio_stream_url(video_id)
-
-    # Step 3: Download and convert
     tmp_dir = tempfile.mkdtemp()
     mp3_path = os.path.join(tmp_dir, "audio.mp3")
     download_audio(stream_url, mp3_path)
-
-    if not os.path.isfile(mp3_path):
-        raise RuntimeError(f"Download failed for '{query}'")
     return mp3_path
 
 
 def download_from_url(url: str) -> str:
-    """Download audio from a YouTube URL (extracts video ID, uses Piped)."""
-    import re
+    """Download audio from a YouTube URL via Piped/Invidious proxies."""
     match = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]+)", url)
     if not match:
         raise ValueError(f"Cannot extract video ID from URL: {url}")
 
     video_id = match.group(1)
-    stream_url = get_audio_stream_url(video_id)
+    stream_url = get_audio_url(video_id)
 
     tmp_dir = tempfile.mkdtemp()
     mp3_path = os.path.join(tmp_dir, "audio.mp3")
     download_audio(stream_url, mp3_path)
-
-    if not os.path.isfile(mp3_path):
-        raise RuntimeError(f"Download failed for '{url}'")
     return mp3_path
