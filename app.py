@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests as http_requests
@@ -249,12 +250,18 @@ def compare_mixed_stream():
             lyrics_sim = compute_lyrics_similarity(lyrics_a, lyrics_b)
 
             # Step 3: Analyze BOTH songs in parallel (biggest speedup)
+            # Send heartbeat progress ticks every 2s so the bar keeps moving
             yield _sse_event("analyzing", 30)
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fut_a = pool.submit(extract_features, path_a)
                 fut_b = pool.submit(extract_features, path_b)
-                features_a = fut_a.result(timeout=120)
-                features_b = fut_b.result(timeout=120)
+                pct = 30
+                while not (fut_a.done() and fut_b.done()):
+                    time.sleep(2)
+                    pct = min(pct + 5, 80)  # creep 30→80 in 5% steps
+                    yield _sse_event("analyzing", pct)
+                features_a = fut_a.result(timeout=0)
+                features_b = fut_b.result(timeout=0)
 
             # Step 4: Compute overall similarity
             yield _sse_event("comparing", 85)

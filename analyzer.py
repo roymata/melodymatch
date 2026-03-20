@@ -3,10 +3,10 @@
 PERFORMANCE-OPTIMIZED for Render free tier (0.1 CPU / 512 MB RAM):
 - 10 seconds of audio (iTunes previews are 30s, 10s captures enough structure)
 - 11025 Hz sample rate (half of 22050 — still covers all music-relevant frequencies)
-- hop_length=1024 (double default — halves the number of frames to process)
+- hop_length=1024, n_fft=1024 — smaller FFT with no frame overlap
+- Compute STFT + mel spectrogram ONCE and reuse across all features (was 7+ times)
 - 14 MFCCs (drop [0]) instead of 20 — still captures timbre accurately
 - chroma_stft instead of chroma_cens (much faster, nearly as good for comparison)
-- Combined: ~20x faster than the original 60s/22050Hz/512hop configuration
 
 Key design choices for accurate similarity:
 - Use Euclidean distance (not cosine) — cosine on music feature means gives
@@ -36,44 +36,58 @@ def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) ->
     Optimized defaults:
       sr=11025      — 50% less data vs 22050, still covers all music frequencies
       duration=10.0 — 83% less data vs 60s, 10s captures enough structure
-      hop_length=1024 — 50% fewer frames vs default 512
+      hop_length=1024, n_fft=1024 — minimal FFT, no frame overlap
+
+    Key optimization: STFT and mel spectrogram are computed ONCE and reused by
+    every feature extractor — previously each call recomputed from scratch.
 
     Returns means, stds, and temporal data for accurate comparison.
     """
     y, sr = librosa.load(file_path, sr=sr, duration=duration)
 
     hop = 1024
+    n_fft = 1024
 
-    # --- Tempo / BPM ---
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop)
+    # ── Compute core spectrograms ONCE and reuse everywhere ──────────────
+    S_mag = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop))
+    S_pow = S_mag ** 2
+    mel_S = librosa.feature.melspectrogram(S=S_pow, sr=sr, n_fft=n_fft)
+    mel_db = librosa.power_to_db(mel_S)
+
+    # --- Onset envelope + Tempo / BPM (from mel spectrogram) ---
+    onset_env = librosa.onset.onset_strength(S=mel_db, sr=sr, hop_length=hop)
+    tempo, _ = librosa.beat.beat_track(
+        onset_envelope=onset_env, sr=sr, hop_length=hop
+    )
     tempo_val = float(np.atleast_1d(tempo)[0])
 
-    # --- MFCCs (drop coefficient 0 = energy/loudness) ---
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=14, hop_length=hop)
+    # --- MFCCs from mel spectrogram (drop coefficient 0 = energy/loudness) ---
+    mfcc = librosa.feature.mfcc(S=mel_db, sr=sr, n_mfcc=14)
     mfcc = mfcc[1:]  # drop MFCC[0] → 13 coefficients
     mfcc_mean = np.mean(mfcc, axis=1)
     mfcc_std = np.std(mfcc, axis=1)
 
-    # --- Spectral contrast ---
-    spec_contrast = librosa.feature.spectral_contrast(y=y, sr=sr, n_bands=6, hop_length=hop)
+    # --- Spectral contrast from magnitude spectrogram ---
+    spec_contrast = librosa.feature.spectral_contrast(
+        S=S_mag, sr=sr, n_bands=6
+    )
     spec_contrast_mean = np.mean(spec_contrast, axis=1)
     spec_contrast_std = np.std(spec_contrast, axis=1)
 
-    # --- Chroma (STFT — faster than CENS, good for key/chord comparison) ---
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop)
+    # --- Chroma from power spectrogram ---
+    chroma = librosa.feature.chroma_stft(S=S_pow, sr=sr)
     chroma_mean = np.mean(chroma, axis=1)
     chroma_std = np.std(chroma, axis=1)
 
-    # --- Onset strength envelope (for rhythm comparison) ---
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+    # --- Normalize onset envelope (for rhythm cross-correlation) ---
     norm = np.linalg.norm(onset_env)
     if norm > 0:
         onset_env = onset_env / norm
 
-    # --- Spectral features ---
-    spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop)[0]
-    spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, hop_length=hop)[0]
-    spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr, hop_length=hop)[0]
+    # --- Spectral summary features from magnitude spectrogram ---
+    spectral_centroid = librosa.feature.spectral_centroid(S=S_mag, sr=sr)[0]
+    spectral_rolloff = librosa.feature.spectral_rolloff(S=S_mag, sr=sr)[0]
+    spectral_bandwidth = librosa.feature.spectral_bandwidth(S=S_mag, sr=sr)[0]
     zcr = librosa.feature.zero_crossing_rate(y, hop_length=hop)[0]
 
     return {

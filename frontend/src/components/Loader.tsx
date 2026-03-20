@@ -128,10 +128,7 @@ export default function Loader({
 }: LoaderProps) {
   const [elapsed, setElapsed] = useState(0);
   const [tipIndex, setTipIndex] = useState(0);
-  const [displayPercent, setDisplayPercent] = useState(0);
   const startRef = useRef(Date.now());
-  const animFrameRef = useRef<number>(0);
-  const lastServerPercent = useRef(0);
 
   // Elapsed timer
   useEffect(() => {
@@ -149,46 +146,6 @@ export default function Loader({
     }, 6000);
     return () => clearInterval(id);
   }, []);
-
-  // Smooth progress animation: glides toward the next expected milestone
-  // so the bar never appears stuck even during long server-side operations
-  useEffect(() => {
-    lastServerPercent.current = progress.percent;
-  }, [progress.percent]);
-
-  useEffect(() => {
-    let start = performance.now();
-    let from = displayPercent;
-    const target = progress.percent;
-    // Max we'll creep toward during an active step (don't overshoot server)
-    const ceiling =
-      progress.step === "analyzing" ? 80 :
-      progress.step === "searching" ? 18 :
-      progress.step === "fetching_lyrics" ? 28 :
-      target;
-
-    const animate = (now: number) => {
-      const dt = (now - start) / 1000; // seconds elapsed
-
-      if (from < target) {
-        // Quick catch-up to the server's reported value
-        const catchUp = from + (target - from) * Math.min(1, dt * 3);
-        setDisplayPercent(Math.round(Math.min(catchUp, target)));
-      } else if (target < ceiling) {
-        // Synthetic creep: slowly advance 1% every ~2s toward ceiling
-        const crept = target + dt * 0.5;
-        setDisplayPercent(Math.round(Math.min(crept, ceiling)));
-      } else {
-        setDisplayPercent(Math.round(target));
-      }
-
-      animFrameRef.current = requestAnimationFrame(animate);
-    };
-
-    animFrameRef.current = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animFrameRef.current);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress.percent, progress.step]);
 
   // ── File-upload fallback (simple spinner) ──
   if (status === "uploading" || status === "analyzing") {
@@ -263,7 +220,7 @@ export default function Loader({
   const stepKeys = steps.map((s) => s.key);
   const currentIndex = stepKeys.indexOf(progress.step);
 
-  const shown = Math.min(displayPercent, 100);
+  const shown = Math.min(progress.percent, 100);
   const tip = TIPS[tipIndex];
 
   return (
@@ -305,7 +262,7 @@ export default function Loader({
         </div>
         <div className="h-2 bg-gray-800/80 rounded-full overflow-hidden">
           <div
-            className="h-full rounded-full transition-all duration-500 ease-out"
+            className="h-full rounded-full transition-all duration-1000 ease-out"
             style={{
               width: `${shown}%`,
               background:
