@@ -1,15 +1,18 @@
 """MelodyMatch — single-service Flask app.
 
 Serves the React frontend as static files AND exposes the audio comparison API.
+Includes SSE streaming endpoint for real-time progress updates.
 """
 
+import json
 import os
 import shutil
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import requests as http_requests
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 
 from analyzer import extract_features, compute_similarity
@@ -61,6 +64,16 @@ def _cleanup_paths(paths: list):
             parent = os.path.dirname(p)
             if parent and parent != "/tmp" and parent != tempfile.gettempdir():
                 shutil.rmtree(parent, ignore_errors=True)
+
+
+def _sse_event(step: str, progress: int, result=None, error=None) -> str:
+    """Format a Server-Sent Event data line."""
+    payload = {"step": step, "progress": progress}
+    if result is not None:
+        payload["result"] = result
+    if error is not None:
+        payload["error"] = error
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 # ── API routes ──────────────────────────────────────────────────────────────
@@ -137,6 +150,65 @@ def compare_mixed():
         return jsonify({"error": f"Comparison failed: {str(e)}"}), 500
     finally:
         _cleanup_paths([path_a, path_b])
+
+
+@app.route("/api/compare-mixed-stream", methods=["POST"])
+def compare_mixed_stream():
+    """Compare two songs with real-time SSE progress streaming.
+
+    Sends progress events as each step completes:
+      searching (5%)  → downloading songs in parallel
+      analyzing_a (25%) → extracting features for song A
+      analyzing_b (55%) → extracting features for song B
+      comparing (90%)   → computing similarity
+      done (100%)       → final result
+    """
+    data = request.get_json(silent=True)
+    if not data or "song_a" not in data or "song_b" not in data:
+        return jsonify({"error": "song_a and song_b are required"}), 400
+
+    def generate():
+        path_a = path_b = None
+        try:
+            # Step 1: Download both songs in parallel
+            yield _sse_event("searching", 5)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                future_a = pool.submit(_resolve_song, data["song_a"])
+                future_b = pool.submit(_resolve_song, data["song_b"])
+                path_a = future_a.result(timeout=60)
+                path_b = future_b.result(timeout=60)
+
+            # Step 2: Analyze Song A
+            yield _sse_event("analyzing_a", 25)
+            features_a = extract_features(path_a)
+
+            # Step 3: Analyze Song B
+            yield _sse_event("analyzing_b", 55)
+            features_b = extract_features(path_b)
+
+            # Step 4: Compute similarity
+            yield _sse_event("comparing", 90)
+            result = compute_similarity(features_a, features_b)
+            _increment_counter()
+
+            # Done!
+            yield _sse_event("done", 100, result=result)
+
+        except Exception as e:
+            yield _sse_event("error", 0, error=str(e))
+        finally:
+            _cleanup_paths([path_a, path_b])
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── iTunes search proxy (CORS workaround) ──────────────────────────────────

@@ -24,7 +24,7 @@ export interface UploadedFile {
   name: string;
 }
 
-export type CompareStatus = "idle" | "uploading" | "analyzing" | "done" | "error";
+export type CompareStatus = "idle" | "uploading" | "analyzing" | "streaming" | "done" | "error";
 
 export type InputMode = "file" | "search";
 
@@ -49,4 +49,19 @@ export interface MixedSongInput {
   name?: string;
   artist?: string;
   url?: string;
+}
+
+/** SSE progress step names from the streaming endpoint. */
+export type ProgressStep =
+  | "searching"
+  | "analyzing_a"
+  | "analyzing_b"
+  | "comparing"
+  | "done"
+  | "error";
+
+/** Real-time progress info from the SSE stream. */
+export interface ProgressInfo {
+  step: ProgressStep;
+  percent: number;
 }

@@ -1,7 +1,16 @@
 import { useState, useCallback } from "react";
-import type { ComparisonResult, CompareStatus, SearchQuery, MixedSongInput } from "../types";
+import type {
+  ComparisonResult,
+  CompareStatus,
+  SearchQuery,
+  MixedSongInput,
+  ProgressInfo,
+  ProgressStep,
+} from "../types";
 
 const API_URL = import.meta.env.VITE_API_URL || "/api";
+
+const INITIAL_PROGRESS: ProgressInfo = { step: "searching", percent: 0 };
 
 /** Safely parse JSON, throw a readable error if response is HTML. */
 async function safeJson(res: Response) {
@@ -29,7 +38,6 @@ function toMixedInput(search: SearchQuery): MixedSongInput {
   if (track) {
     return { type: "search", name: track.trackName, artist: track.artistName };
   }
-  // Fallback: use the raw query as both name and artist
   return { type: "search", name: search.query.trim(), artist: "" };
 }
 
@@ -37,11 +45,13 @@ export function useCompare() {
   const [status, setStatus] = useState<CompareStatus>("idle");
   const [result, setResult] = useState<ComparisonResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ProgressInfo>(INITIAL_PROGRESS);
 
   const compareFiles = useCallback(async (fileA: File, fileB: File) => {
     setStatus("uploading");
     setResult(null);
     setError(null);
+    setProgress(INITIAL_PROGRESS);
 
     try {
       const form = new FormData();
@@ -70,30 +80,78 @@ export function useCompare() {
   }, []);
 
   const compareMixed = useCallback(async (searchA: SearchQuery, searchB: SearchQuery) => {
-    setStatus("uploading");
+    setStatus("streaming");
     setResult(null);
     setError(null);
+    setProgress({ step: "searching", percent: 0 });
+
+    const payload = JSON.stringify({
+      song_a: toMixedInput(searchA),
+      song_b: toMixedInput(searchB),
+    });
 
     try {
-      setStatus("analyzing");
-
-      const res = await fetch(`${API_URL}/compare-mixed`, {
+      const res = await fetch(`${API_URL}/compare-mixed-stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          song_a: toMixedInput(searchA),
-          song_b: toMixedInput(searchB),
-        }),
+        body: payload,
       });
 
-      const data = await safeJson(res);
-
-      if (!res.ok) {
+      // If the response isn't OK and isn't a stream, handle as regular error
+      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+        const data = await safeJson(res);
         throw new Error(data.error || "Comparison failed");
       }
 
-      setResult(data);
-      setStatus("done");
+      if (!res.ok) {
+        throw new Error(`Server error (${res.status}). The service may be waking up — please retry in 30 seconds.`);
+      }
+
+      // Read the SSE stream
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let gotResult = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by double newlines
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop()!; // keep incomplete event in buffer
+
+        for (const part of parts) {
+          const dataLine = part
+            .split("\n")
+            .find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
+
+          const data = JSON.parse(dataLine.slice(6));
+
+          if (data.error) {
+            throw new Error(data.error);
+          }
+
+          setProgress({
+            step: data.step as ProgressStep,
+            percent: data.progress,
+          });
+
+          if (data.step === "done" && data.result) {
+            setResult(data.result);
+            setStatus("done");
+            gotResult = true;
+          }
+        }
+      }
+
+      if (!gotResult) {
+        throw new Error(
+          "Analysis completed but no results received. Please try again."
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setStatus("error");
@@ -104,7 +162,8 @@ export function useCompare() {
     setStatus("idle");
     setResult(null);
     setError(null);
+    setProgress(INITIAL_PROGRESS);
   }, []);
 
-  return { status, result, error, compareFiles, compareMixed, reset };
+  return { status, result, error, progress, compareFiles, compareMixed, reset };
 }

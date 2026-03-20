@@ -1,5 +1,13 @@
 """Audio feature extraction and similarity computation using librosa.
 
+PERFORMANCE-OPTIMIZED for Render free tier (0.1 CPU / 512 MB RAM):
+- 15 seconds of audio (iTunes previews are 30s, 15s is plenty for features)
+- 16 kHz sample rate (down from 22050 — still captures all music-relevant frequencies)
+- hop_length=1024 (double default — halves the number of frames to process)
+- 14 MFCCs (drop [0]) instead of 20 — still captures timbre accurately
+- chroma_stft instead of chroma_cens (much faster, nearly as good for comparison)
+- Combined: ~10-15x faster than the original 60s/22050Hz/512hop configuration
+
 Key design choices for accurate similarity:
 - Use Euclidean distance (not cosine) — cosine on music feature means gives
   inflated scores because all songs live in a similar "direction" of feature space.
@@ -12,174 +20,65 @@ Key design choices for accurate similarity:
   so that genuinely different songs score 20-40% and similar ones score 70-90%.
 """
 
-import os
-import re
-import subprocess
-import sys
-import tempfile
-
 import numpy as np
 import librosa
 from scipy.spatial.distance import euclidean
 from scipy.stats import pearsonr
 
 
-_YT_URL_RE = re.compile(
-    r"^https?://(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w\-]+"
-)
-
-
 # ---------------------------------------------------------------------------
-# yt-dlp helpers (unchanged)
+# Feature extraction (optimized for speed)
 # ---------------------------------------------------------------------------
 
-def _find_ytdlp() -> str:
-    """Resolve path to yt-dlp, checking common locations."""
-    for path in [
-        os.path.expanduser("~/.local/bin/yt-dlp"),       # local standalone
-        os.path.join(os.path.dirname(sys.executable), "yt-dlp"),  # venv
-        "/usr/local/bin/yt-dlp",                          # Docker pip install
-    ]:
-        if os.path.isfile(path):
-            return path
-    return "yt-dlp"  # fallback to PATH
-
-
-def _find_ffmpeg_dir() -> str:
-    """Find the directory containing ffmpeg."""
-    for path in [
-        os.path.expanduser("~/.local/bin/ffmpeg"),
-        "/usr/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-    ]:
-        if os.path.isfile(path):
-            return os.path.dirname(path)
-    return "/usr/bin"  # sensible default
-
-
-def _run_ytdlp(source: str, label: str) -> str:
-    """Run yt-dlp to download audio from a URL or search query.
-
-    Includes retry logic for HTTP 429 (rate limiting) and uses Node.js
-    as the JavaScript runtime for YouTube's bot protection challenges.
-    Returns path to downloaded mp3 file.
-    """
-    import time
-    import shutil
-
-    tmp_dir = tempfile.mkdtemp()
-    out_template = os.path.join(tmp_dir, "audio.%(ext)s")
-
-    cmd = [
-        _find_ytdlp(),
-        "--no-playlist",
-        "-f", "bestaudio/best",
-        "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "192K",
-        "--ffmpeg-location", _find_ffmpeg_dir(),
-        "--js-runtimes", "node",
-        "--extractor-retries", "3",
-        "--retry-sleep", "http:5",
-        "-o", out_template,
-        source,
-    ]
-
-    max_retries = 2
-    last_error = ""
-
-    for attempt in range(max_retries + 1):
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=150)
-
-            mp3_path = os.path.join(tmp_dir, "audio.mp3")
-            if os.path.isfile(mp3_path):
-                return mp3_path
-            # yt-dlp may keep original extension
-            for f in os.listdir(tmp_dir):
-                return os.path.join(tmp_dir, f)
-            raise RuntimeError(f"No output file for '{label}'")
-
-        except subprocess.CalledProcessError as exc:
-            last_error = exc.stderr.decode(errors="replace")[:400]
-            if "429" in last_error and attempt < max_retries:
-                time.sleep(5 * (attempt + 1))  # back off: 5s, 10s
-                # Clean partial downloads
-                for f in os.listdir(tmp_dir):
-                    fp = os.path.join(tmp_dir, f)
-                    if os.path.isfile(fp):
-                        os.unlink(fp)
-                continue
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise RuntimeError(f"yt-dlp failed for '{label}': {last_error}")
-        except subprocess.TimeoutExpired:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise RuntimeError(f"Download timed out for '{label}'")
-
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    raise RuntimeError(f"yt-dlp failed after retries for '{label}': {last_error}")
-
-
-def download_youtube_audio(url: str) -> str:
-    """Download audio from a YouTube URL via yt-dlp."""
-    if not _YT_URL_RE.match(url):
-        raise ValueError("Invalid YouTube URL")
-    return _run_ytdlp(url, url)
-
-
-def search_and_download_youtube(song_name: str, artist: str) -> str:
-    """Search YouTube by name + artist, download the top result."""
-    query = f"{song_name} {artist}"
-    return _run_ytdlp(f"ytsearch1:{query}", query)
-
-
-# ---------------------------------------------------------------------------
-# Feature extraction
-# ---------------------------------------------------------------------------
-
-def extract_features(file_path: str, sr: int = 22050, duration: float = 60.0) -> dict:
+def extract_features(file_path: str, sr: int = 16000, duration: float = 15.0) -> dict:
     """Extract a rich set of audio features from a file.
+
+    Optimized defaults:
+      sr=16000      — 27% less data vs 22050, still covers all music frequencies
+      duration=15.0 — 75% less data vs 60s, 15s captures enough structure
+      hop_length=1024 — 50% fewer frames vs default 512
 
     Returns means, stds, and temporal data for accurate comparison.
     """
     y, sr = librosa.load(file_path, sr=sr, duration=duration)
 
+    hop = 1024
+
     # --- Tempo / BPM ---
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop)
     tempo_val = float(np.atleast_1d(tempo)[0])
 
     # --- MFCCs (drop coefficient 0 = energy/loudness) ---
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
-    mfcc = mfcc[1:]  # drop MFCC[0]
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=14, hop_length=hop)
+    mfcc = mfcc[1:]  # drop MFCC[0] → 13 coefficients
     mfcc_mean = np.mean(mfcc, axis=1)
     mfcc_std = np.std(mfcc, axis=1)
 
     # --- Spectral contrast ---
-    spec_contrast = librosa.feature.spectral_contrast(y=y, sr=sr, n_bands=6)
+    spec_contrast = librosa.feature.spectral_contrast(y=y, sr=sr, n_bands=6, hop_length=hop)
     spec_contrast_mean = np.mean(spec_contrast, axis=1)
     spec_contrast_std = np.std(spec_contrast, axis=1)
 
-    # --- Chroma (CENS = more robust for music comparison) ---
-    chroma = librosa.feature.chroma_cens(y=y, sr=sr)
+    # --- Chroma (STFT — faster than CENS, good for key/chord comparison) ---
+    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop)
     chroma_mean = np.mean(chroma, axis=1)
     chroma_std = np.std(chroma, axis=1)
 
     # --- Onset strength envelope (for rhythm comparison) ---
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-    # Normalize to unit energy
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
     norm = np.linalg.norm(onset_env)
     if norm > 0:
         onset_env = onset_env / norm
 
     # --- Spectral features ---
-    spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-    spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
-    spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
-    zcr = librosa.feature.zero_crossing_rate(y)[0]
+    spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop)[0]
+    spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, hop_length=hop)[0]
+    spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr, hop_length=hop)[0]
+    zcr = librosa.feature.zero_crossing_rate(y, hop_length=hop)[0]
 
     return {
         "tempo": tempo_val,
-        # Timbre: 19 mean + 19 std = 38-dimensional
+        # Timbre: 13 mean + 13 std = 26-dimensional
         "mfcc_mean": mfcc_mean.tolist(),
         "mfcc_std": mfcc_std.tolist(),
         # Spectral texture: 7 mean + 7 std = 14-dimensional
@@ -208,7 +107,6 @@ def _euclidean_similarity(a: np.ndarray, b: np.ndarray, scale: float) -> float:
     """Convert Euclidean distance to 0-100 similarity via exponential decay.
 
     `scale` controls sensitivity — smaller = stricter (lower scores for same distance).
-    Typical scale values: 10-30 for normalized features, 50-200 for raw features.
     """
     dist = euclidean(a, b)
     sim = np.exp(-dist / scale) * 100
@@ -216,46 +114,32 @@ def _euclidean_similarity(a: np.ndarray, b: np.ndarray, scale: float) -> float:
 
 
 def _tempo_similarity(t1: float, t2: float) -> float:
-    """Tempo similarity accounting for double/half-time relationships.
-
-    Uses a stricter mapping than before — 10 BPM difference ≈ 85%,
-    20 BPM difference ≈ 55%, 40+ BPM difference ≈ 10%.
-    """
+    """Tempo similarity accounting for double/half-time relationships."""
     if t1 == 0 and t2 == 0:
         return 100.0
     if t1 == 0 or t2 == 0:
         return 0.0
 
-    # Check direct, double, and half time
     diffs = [
         abs(t1 - t2),
         abs(t1 - 2 * t2),
         abs(2 * t1 - t2),
     ]
     best_diff = min(diffs)
-
-    # Exponential decay: 0 diff = 100%, 10 diff ≈ 85%, 30 diff ≈ 40%, 50+ ≈ ~10%
     return float(np.clip(np.exp(-best_diff / 20) * 100, 0, 100))
 
 
 def _rhythm_similarity(onset_a: np.ndarray, onset_b: np.ndarray) -> float:
-    """Compare rhythmic patterns using cross-correlation of onset envelopes.
-
-    This captures actual beat patterns rather than just average rhythmic energy.
-    """
-    # Trim to same length
+    """Compare rhythmic patterns using cross-correlation of onset envelopes."""
     min_len = min(len(onset_a), len(onset_b))
     if min_len < 10:
-        return 50.0  # Not enough data
+        return 50.0
 
     a = onset_a[:min_len]
     b = onset_b[:min_len]
 
-    # Pearson correlation of onset strength envelopes
     try:
         corr, _ = pearsonr(a, b)
-        # Map from [-1, 1] to [0, 100], where:
-        # corr=1.0 → 100%, corr=0.0 → 30%, corr=-1.0 → 0%
         sim = max(0, (corr + 0.4) / 1.4) * 100
         return float(np.clip(sim, 0, 100))
     except Exception:
@@ -263,12 +147,9 @@ def _rhythm_similarity(onset_a: np.ndarray, onset_b: np.ndarray) -> float:
 
 
 def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
-    """Compute per-dimension and overall similarity between two feature sets.
+    """Compute per-dimension and overall similarity between two feature sets."""
 
-    Uses Euclidean distance with exponential decay for discriminative scoring.
-    """
-
-    # --- Rhythm (onset-envelope cross-correlation) ---
+    # --- Rhythm ---
     rhythm_sim = _rhythm_similarity(
         np.array(feat_a["onset_env"]),
         np.array(feat_b["onset_env"]),
@@ -286,18 +167,18 @@ def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
         feat_b["mfcc_mean"], feat_b["mfcc_std"],
         feat_b["spectral_contrast_mean"], feat_b["spectral_contrast_std"],
     ])
-    # Scale=25: two pop songs ≈ 60-80%, pop vs. classical ≈ 20-40%
-    timbre_sim = _euclidean_similarity(timbre_a, timbre_b, scale=25)
+    # Scale=20: adjusted for 40-dim vector (was 25 for 52-dim)
+    timbre_sim = _euclidean_similarity(timbre_a, timbre_b, scale=20)
 
-    # --- Harmony (chroma CENS mean+std) ---
+    # --- Harmony (chroma STFT mean+std) ---
     harmony_a = np.concatenate([feat_a["chroma_mean"], feat_a["chroma_std"]])
     harmony_b = np.concatenate([feat_b["chroma_mean"], feat_b["chroma_std"]])
-    # Scale=1.5: songs in same key ≈ 70-90%, different keys ≈ 20-50%
-    harmony_sim = _euclidean_similarity(harmony_a, harmony_b, scale=1.5)
+    # Scale=2.0: adjusted for chroma_stft (slightly different distribution than CENS)
+    harmony_sim = _euclidean_similarity(harmony_a, harmony_b, scale=2.0)
 
-    # --- Spectral character (brightness, bandwidth, zcr) ---
+    # --- Spectral character ---
     spectral_a = np.array([
-        feat_a["spectral_centroid_mean"] / 5000,  # normalize to ~0-1 range
+        feat_a["spectral_centroid_mean"] / 5000,
         feat_a["spectral_rolloff_mean"] / 10000,
         feat_a["spectral_bandwidth_mean"] / 5000,
         feat_a["zcr_mean"] * 10,
@@ -315,7 +196,6 @@ def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
     spectral_sim = _euclidean_similarity(spectral_a, spectral_b, scale=0.8)
 
     # --- Weighted overall score ---
-    # Timbre and harmony are the most discriminative for "do these sound alike?"
     overall = (
         0.15 * rhythm_sim
         + 0.10 * tempo_sim

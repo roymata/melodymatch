@@ -19,7 +19,7 @@ export default function App() {
   const [fileB, setFileB] = useState<File | null>(null);
   const [searchA, setSearchA] = useState<SearchQuery>(EMPTY_SEARCH);
   const [searchB, setSearchB] = useState<SearchQuery>(EMPTY_SEARCH);
-  const { status, result, error, compareFiles, compareMixed, reset } = useCompare();
+  const { status, result, error, progress, compareFiles, compareMixed, reset } = useCompare();
 
   const showUrlFallback = status === "error" && mode === "search";
 
@@ -28,15 +28,15 @@ export default function App() {
     return !!s.selectedTrack;
   }
 
-  const canCompareFiles = mode === "file" && fileA && fileB && status !== "analyzing" && status !== "uploading";
+  const isBusy = status === "analyzing" || status === "uploading" || status === "streaming";
+  const canCompareFiles = mode === "file" && fileA && fileB && !isBusy;
   const canCompareSearch =
     mode === "search" &&
     isSongReady(searchA) &&
     isSongReady(searchB) &&
-    status !== "analyzing" &&
-    status !== "uploading";
+    !isBusy;
   const canCompare = canCompareFiles || canCompareSearch;
-  const isLoading = status === "uploading" || status === "analyzing";
+  const isLoading = isBusy;
 
   function handleCompare() {
     if (mode === "file" && fileA && fileB) {
@@ -157,7 +157,14 @@ export default function App() {
         )}
 
         {/* Loading state */}
-        {isLoading && <Loader status={status} />}
+        {isLoading && (
+          <Loader
+            status={status}
+            progress={progress}
+            songAName={songAName}
+            songBName={songBName}
+          />
+        )}
 
         {/* Results */}
         {status === "done" && result && (
