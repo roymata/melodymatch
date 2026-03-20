@@ -113,6 +113,31 @@ export function useCompare() {
       let buffer = "";
       let gotResult = false;
 
+      /** Parse a single SSE event chunk and update state. */
+      function handleEvent(raw: string) {
+        const dataLine = raw
+          .split("\n")
+          .find((l) => l.startsWith("data: "));
+        if (!dataLine) return;
+
+        const data = JSON.parse(dataLine.slice(6));
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        setProgress({
+          step: data.step as ProgressStep,
+          percent: data.progress,
+        });
+
+        if (data.step === "done" && data.result) {
+          setResult(data.result);
+          setStatus("done");
+          gotResult = true;
+        }
+      }
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -123,27 +148,17 @@ export function useCompare() {
         buffer = parts.pop()!; // keep incomplete event in buffer
 
         for (const part of parts) {
-          const dataLine = part
-            .split("\n")
-            .find((l) => l.startsWith("data: "));
-          if (!dataLine) continue;
+          if (part.trim()) handleEvent(part);
+        }
+      }
 
-          const data = JSON.parse(dataLine.slice(6));
-
-          if (data.error) {
-            throw new Error(data.error);
-          }
-
-          setProgress({
-            step: data.step as ProgressStep,
-            percent: data.progress,
-          });
-
-          if (data.step === "done" && data.result) {
-            setResult(data.result);
-            setStatus("done");
-            gotResult = true;
-          }
+      // Flush remaining buffer — the final event may not have
+      // a trailing \n\n before the stream closes
+      buffer += decoder.decode(); // flush decoder
+      if (buffer.trim()) {
+        // Buffer may contain one or more events
+        for (const part of buffer.split("\n\n")) {
+          if (part.trim()) handleEvent(part);
         }
       }
 
