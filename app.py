@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 
+import requests as http_requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -114,6 +115,26 @@ def compare_mixed():
         return jsonify({"error": f"Comparison failed: {str(e)}"}), 500
     finally:
         _cleanup_paths([path_a, path_b])
+
+
+# ── iTunes search proxy (CORS workaround) ──────────────────────────────────
+
+@app.route("/api/search")
+def itunes_search():
+    """Proxy iTunes Search API to avoid browser CORS restrictions."""
+    term = request.args.get("term", "").strip()
+    if not term or len(term) < 2:
+        return jsonify({"results": []})
+
+    try:
+        r = http_requests.get(
+            "https://itunes.apple.com/search",
+            params={"term": term, "media": "music", "entity": "song", "limit": "6"},
+            timeout=10,
+        )
+        return jsonify(r.json())
+    except Exception:
+        return jsonify({"results": []})
 
 
 # ── Serve React SPA ────────────────────────────────────────────────────────

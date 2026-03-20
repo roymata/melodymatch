@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback } from "react";
 import type { ItunesTrack } from "../types";
 
-const ITUNES_API = "https://itunes.apple.com/search";
+// Proxy through our Flask backend to avoid CORS issues with iTunes API
+const API_URL = import.meta.env.VITE_API_URL || "/api";
+const SEARCH_API = `${API_URL}/search`;
 const DEBOUNCE_MS = 400;
 const MIN_QUERY_LEN = 3;
 
@@ -52,12 +54,7 @@ export function useItunesSearch() {
       abortRef.current = controller;
 
       try {
-        const url = `${ITUNES_API}?${new URLSearchParams({
-          term: trimmed,
-          media: "music",
-          entity: "song",
-          limit: "6",
-        })}`;
+        const url = `${SEARCH_API}?${new URLSearchParams({ term: trimmed })}`;
 
         const res = await fetch(url, { signal: controller.signal });
         if (!res.ok) throw new Error("iTunes API error");
