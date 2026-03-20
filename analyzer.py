@@ -1,12 +1,13 @@
 """Audio feature extraction and similarity computation using librosa.
 
 PERFORMANCE-OPTIMIZED for Render free tier (0.1 CPU / 512 MB RAM):
-- 10 seconds of audio (iTunes previews are 30s, 10s captures enough structure)
-- 11025 Hz sample rate (half of 22050 — still covers all music-relevant frequencies)
+- 8 seconds of audio (iTunes previews are 30s, 8s is enough for comparison)
+- 11025 Hz sample rate with kaiser_fast resampling (3x faster resample)
 - hop_length=1024, n_fft=1024 — smaller FFT with no frame overlap
-- Compute STFT + mel spectrogram ONCE and reuse across all features (was 7+ times)
-- 14 MFCCs (drop [0]) instead of 20 — still captures timbre accurately
-- chroma_stft instead of chroma_cens (much faster, nearly as good for comparison)
+- Compute STFT + mel spectrogram ONCE and reuse across all features
+- 13 MFCCs (drop [0]) — captures timbre accurately
+- n_bands=4 for spectral contrast (safe for 11025 Hz Nyquist)
+- chroma_stft instead of chroma_cens (much faster)
 
 Key design choices for accurate similarity:
 - Use Euclidean distance (not cosine) — cosine on music feature means gives
@@ -30,20 +31,19 @@ from scipy.stats import pearsonr
 # Feature extraction (optimized for speed)
 # ---------------------------------------------------------------------------
 
-def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) -> dict:
+def extract_features(file_path: str, sr: int = 11025, duration: float = 8.0) -> dict:
     """Extract a rich set of audio features from a file.
 
     Optimized defaults:
-      sr=11025      — 50% less data vs 22050, still covers all music frequencies
-      duration=10.0 — 83% less data vs 60s, 10s captures enough structure
-      hop_length=1024, n_fft=1024 — minimal FFT, no frame overlap
+      sr=11025        — 50% less data vs 22050, covers music frequencies
+      duration=8.0    — 87% less data vs 60s, 8s captures enough structure
+      res_type=kaiser_fast — ~3x faster resampling vs default kaiser_best
+      hop_length=1024, n_fft=1024 — smallest practical FFT
 
     Key optimization: STFT and mel spectrogram are computed ONCE and reused by
     every feature extractor — previously each call recomputed from scratch.
-
-    Returns means, stds, and temporal data for accurate comparison.
     """
-    y, sr = librosa.load(file_path, sr=sr, duration=duration)
+    y, sr = librosa.load(file_path, sr=sr, duration=duration, res_type="kaiser_fast")
 
     hop = 1024
     n_fft = 1024
@@ -68,8 +68,10 @@ def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) ->
     mfcc_std = np.std(mfcc, axis=1)
 
     # --- Spectral contrast from magnitude spectrogram ---
+    # n_bands=4 (not 6) because sr=11025 → Nyquist=5512 Hz
+    # 6 octave bands from 200 Hz would reach 6400 Hz, exceeding Nyquist
     spec_contrast = librosa.feature.spectral_contrast(
-        S=S_mag, sr=sr, n_bands=6
+        S=S_mag, sr=sr, n_bands=4
     )
     spec_contrast_mean = np.mean(spec_contrast, axis=1)
     spec_contrast_std = np.std(spec_contrast, axis=1)
@@ -87,7 +89,6 @@ def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) ->
     # --- Spectral summary features from magnitude spectrogram ---
     spectral_centroid = librosa.feature.spectral_centroid(S=S_mag, sr=sr)[0]
     spectral_rolloff = librosa.feature.spectral_rolloff(S=S_mag, sr=sr)[0]
-    spectral_bandwidth = librosa.feature.spectral_bandwidth(S=S_mag, sr=sr)[0]
     zcr = librosa.feature.zero_crossing_rate(y, hop_length=hop)[0]
 
     return {
@@ -95,7 +96,7 @@ def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) ->
         # Timbre: 13 mean + 13 std = 26-dimensional
         "mfcc_mean": mfcc_mean.tolist(),
         "mfcc_std": mfcc_std.tolist(),
-        # Spectral texture: 7 mean + 7 std = 14-dimensional
+        # Spectral texture: 5 mean + 5 std = 10-dimensional
         "spectral_contrast_mean": spec_contrast_mean.tolist(),
         "spectral_contrast_std": spec_contrast_std.tolist(),
         # Harmony: 12 mean + 12 std = 24-dimensional
@@ -107,7 +108,6 @@ def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) ->
         "spectral_centroid_mean": float(np.mean(spectral_centroid)),
         "spectral_centroid_std": float(np.std(spectral_centroid)),
         "spectral_rolloff_mean": float(np.mean(spectral_rolloff)),
-        "spectral_bandwidth_mean": float(np.mean(spectral_bandwidth)),
         "zcr_mean": float(np.mean(zcr)),
         "zcr_std": float(np.std(zcr)),
     }
@@ -161,13 +161,7 @@ def _rhythm_similarity(onset_a: np.ndarray, onset_b: np.ndarray) -> float:
 
 
 def compute_similarity(feat_a: dict, feat_b: dict, lyrics_sim: float | None = None) -> dict:
-    """Compute per-dimension and overall similarity between two feature sets.
-
-    Args:
-        feat_a, feat_b: Audio feature dicts from extract_features().
-        lyrics_sim: Optional lyrics similarity score (0-100) from
-                    compute_lyrics_similarity(). None if unavailable.
-    """
+    """Compute per-dimension and overall similarity between two feature sets."""
 
     # --- Rhythm ---
     rhythm_sim = _rhythm_similarity(
@@ -198,7 +192,6 @@ def compute_similarity(feat_a: dict, feat_b: dict, lyrics_sim: float | None = No
     spectral_a = np.array([
         feat_a["spectral_centroid_mean"] / 5000,
         feat_a["spectral_rolloff_mean"] / 10000,
-        feat_a["spectral_bandwidth_mean"] / 5000,
         feat_a["zcr_mean"] * 10,
         feat_a["spectral_centroid_std"] / 2000,
         feat_a["zcr_std"] * 10,
@@ -206,7 +199,6 @@ def compute_similarity(feat_a: dict, feat_b: dict, lyrics_sim: float | None = No
     spectral_b = np.array([
         feat_b["spectral_centroid_mean"] / 5000,
         feat_b["spectral_rolloff_mean"] / 10000,
-        feat_b["spectral_bandwidth_mean"] / 5000,
         feat_b["zcr_mean"] * 10,
         feat_b["spectral_centroid_std"] / 2000,
         feat_b["zcr_std"] * 10,

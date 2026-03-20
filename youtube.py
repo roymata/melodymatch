@@ -63,11 +63,15 @@ def _itunes_search(query: str, limit: int = 5) -> list[dict]:
 
 
 def _itunes_download_preview(preview_url: str, output_path: str):
-    """Download an iTunes preview URL and convert to mp3."""
+    """Download an iTunes preview URL and convert to WAV at analysis sample rate.
+
+    Outputs mono 11025 Hz WAV — this means librosa.load can skip resampling
+    entirely and soundfile reads it natively (no audioread fallback).
+    """
     r = requests.get(preview_url, timeout=60, stream=True)
     r.raise_for_status()
 
-    # iTunes previews are m4a — download then convert
+    # iTunes previews are m4a — download then convert to WAV
     raw_path = output_path + ".m4a"
     with open(raw_path, "wb") as f:
         for chunk in r.iter_content(chunk_size=65536):
@@ -75,8 +79,8 @@ def _itunes_download_preview(preview_url: str, output_path: str):
 
     try:
         subprocess.run(
-            [_find_ffmpeg(), "-i", raw_path, "-vn", "-acodec", "libmp3lame",
-             "-ab", "192k", "-y", "-loglevel", "error", output_path],
+            [_find_ffmpeg(), "-i", raw_path, "-vn", "-ac", "1",
+             "-ar", "11025", "-y", "-loglevel", "error", output_path],
             check=True, capture_output=True, timeout=30,
         )
     finally:
@@ -127,7 +131,7 @@ def _youtube_audio_url(video_id: str) -> str | None:
 
 
 def _download_stream(stream_url: str, output_path: str):
-    """Download a stream URL and convert to mp3."""
+    """Download a stream URL and convert to WAV at analysis sample rate."""
     r = requests.get(stream_url, timeout=120, stream=True,
                      headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
@@ -139,8 +143,8 @@ def _download_stream(stream_url: str, output_path: str):
 
     try:
         subprocess.run(
-            [_find_ffmpeg(), "-i", raw_path, "-vn", "-acodec", "libmp3lame",
-             "-ab", "192k", "-y", "-loglevel", "error", output_path],
+            [_find_ffmpeg(), "-i", raw_path, "-vn", "-ac", "1",
+             "-ar", "11025", "-y", "-loglevel", "error", output_path],
             check=True, capture_output=True, timeout=60,
         )
     finally:
@@ -166,7 +170,7 @@ def search_and_download(song_name: str, artist: str) -> str:
         preview_url = track.get("previewUrl")
         if preview_url:
             tmp_dir = tempfile.mkdtemp()
-            mp3_path = os.path.join(tmp_dir, "audio.mp3")
+            mp3_path = os.path.join(tmp_dir, "audio.wav")
             try:
                 _itunes_download_preview(preview_url, mp3_path)
                 return mp3_path
@@ -195,7 +199,7 @@ def download_from_url(url: str) -> str:
         )
 
     tmp_dir = tempfile.mkdtemp()
-    mp3_path = os.path.join(tmp_dir, "audio.mp3")
+    mp3_path = os.path.join(tmp_dir, "audio.wav")
     _download_stream(stream_url, mp3_path)
 
     if not os.path.isfile(mp3_path) or os.path.getsize(mp3_path) < 1000:
