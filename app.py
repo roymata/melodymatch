@@ -28,9 +28,9 @@ CORS(app)
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
 
-# ── Comparison counter (in-memory, seeded for social proof) ────────────────
+# ── Comparison counter (in-memory, resets on redeploy) ─────────────────────
 _counter_lock = threading.Lock()
-_comparison_count = 1247  # seed
+_comparison_count = 0
 
 
 def _increment_counter():
