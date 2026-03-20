@@ -3,13 +3,12 @@ import type { ComparisonResult, CompareStatus, SearchQuery, MixedSongInput } fro
 
 const API_URL = import.meta.env.VITE_API_URL || "/api";
 
-/** Safely parse JSON, throw a readable error if response is HTML (e.g. timeout page). */
+/** Safely parse JSON, throw a readable error if response is HTML. */
 async function safeJson(res: Response) {
   const text = await res.text();
   try {
     return JSON.parse(text);
   } catch {
-    // Server returned HTML (Render timeout/error page) instead of JSON
     if (text.includes("<!DOCTYPE") || text.includes("<html")) {
       throw new Error(
         res.status === 504 || res.status === 502
@@ -26,7 +25,12 @@ function toMixedInput(search: SearchQuery): MixedSongInput {
   if (search.fallbackUrl?.trim()) {
     return { type: "url", url: search.fallbackUrl.trim() };
   }
-  return { type: "search", name: search.name.trim(), artist: search.artist.trim() };
+  const track = search.selectedTrack;
+  if (track) {
+    return { type: "search", name: track.trackName, artist: track.artistName };
+  }
+  // Fallback: use the raw query as both name and artist
+  return { type: "search", name: search.query.trim(), artist: "" };
 }
 
 export function useCompare() {
@@ -65,7 +69,6 @@ export function useCompare() {
     }
   }, []);
 
-  /** Compare two songs — each can be a search query or a direct URL. */
   const compareMixed = useCallback(async (searchA: SearchQuery, searchB: SearchQuery) => {
     setStatus("uploading");
     setResult(null);

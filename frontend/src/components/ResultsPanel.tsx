@@ -6,6 +6,8 @@ interface ResultsPanelProps {
   result: ComparisonResult;
   songAName: string;
   songBName: string;
+  songAArt?: string;
+  songBArt?: string;
   onReset: () => void;
 }
 
@@ -16,7 +18,22 @@ const BREAKDOWN_META: Record<string, { label: string; description: string }> = {
   harmony: { label: "Harmony", description: "Pitch & chord content" },
 };
 
-export default function ResultsPanel({ result, songAName, songBName, onReset }: ResultsPanelProps) {
+function AlbumArt({ src }: { src?: string }) {
+  if (src) {
+    return <img src={src} alt="" className="w-20 h-20 rounded-lg shadow-lg mb-2" />;
+  }
+  return (
+    <div className="w-20 h-20 rounded-lg bg-gray-800 mb-2 flex items-center justify-center text-gray-600">
+      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="m9 9 10.5-3m0 6.553v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 1 1-.99-3.467l2.31-.66a2.25 2.25 0 0 0 1.632-2.163Zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 0 1-.99-3.467l2.31-.66A2.25 2.25 0 0 0 9 15.553Z" />
+      </svg>
+    </div>
+  );
+}
+
+export default function ResultsPanel({
+  result, songAName, songBName, songAArt, songBArt, onReset,
+}: ResultsPanelProps) {
   const { overall, breakdown, details } = result;
 
   return (
@@ -25,14 +42,16 @@ export default function ResultsPanel({ result, songAName, songBName, onReset }: 
       <div className="flex flex-col items-center">
         <ScoreRing score={overall} />
 
-        {/* Song details */}
+        {/* Song details with album art */}
         <div className="mt-6 grid grid-cols-2 gap-8 text-center text-sm">
-          <div>
+          <div className="flex flex-col items-center">
+            <AlbumArt src={songAArt} />
             <p className="text-gray-400 text-xs mb-1">Song A</p>
             <p className="font-medium text-gray-200 truncate max-w-[160px]">{songAName}</p>
             <p className="text-xs text-gray-500 mt-1">{details.song_a.tempo_bpm} BPM</p>
           </div>
-          <div>
+          <div className="flex flex-col items-center">
+            <AlbumArt src={songBArt} />
             <p className="text-gray-400 text-xs mb-1">Song B</p>
             <p className="font-medium text-gray-200 truncate max-w-[160px]">{songBName}</p>
             <p className="text-xs text-gray-500 mt-1">{details.song_b.tempo_bpm} BPM</p>

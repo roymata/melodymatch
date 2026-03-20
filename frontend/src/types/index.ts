@@ -28,9 +28,18 @@ export type CompareStatus = "idle" | "uploading" | "analyzing" | "done" | "error
 
 export type InputMode = "file" | "search";
 
+export interface ItunesTrack {
+  trackId: number;
+  trackName: string;
+  artistName: string;
+  collectionName: string;
+  artworkUrl: string;
+  previewUrl?: string;
+}
+
 export interface SearchQuery {
-  name: string;
-  artist: string;
+  query: string;
+  selectedTrack?: ItunesTrack;
   fallbackUrl?: string;
 }
 
