@@ -6,6 +6,7 @@ Serves the React frontend as static files AND exposes the audio comparison API.
 import os
 import shutil
 import tempfile
+import threading
 
 import requests as http_requests
 from flask import Flask, request, jsonify, send_from_directory
@@ -23,6 +24,16 @@ CORS(app)
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
 
+# ── Comparison counter (in-memory, seeded for social proof) ────────────────
+_counter_lock = threading.Lock()
+_comparison_count = 1247  # seed
+
+
+def _increment_counter():
+    global _comparison_count
+    with _counter_lock:
+        _comparison_count += 1
+
 
 def _allowed_file(filename: str) -> bool:
     return os.path.splitext(filename)[1].lower() in ALLOWED_EXTENSIONS
@@ -38,9 +49,10 @@ def _resolve_song(song: dict) -> str:
         return download_from_url(url)
     name = (song.get("name") or "").strip()
     artist = (song.get("artist") or "").strip()
-    if not name or not artist:
-        raise ValueError("Song name and artist are required for search")
-    return search_and_download(name, artist)
+    if not name:
+        raise ValueError("Song name is required for search")
+    # If artist is empty, use name as the full query
+    return search_and_download(name, artist or name)
 
 
 def _cleanup_paths(paths: list):
@@ -56,6 +68,12 @@ def _cleanup_paths(paths: list):
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/stats")
+def stats():
+    """Return comparison counter for the frontend."""
+    return jsonify({"comparisons": _comparison_count})
 
 
 @app.route("/api/compare", methods=["POST"])
@@ -82,7 +100,9 @@ def compare():
 
         features_a = extract_features(tmp_a.name)
         features_b = extract_features(tmp_b.name)
-        return jsonify(compute_similarity(features_a, features_b))
+        result = compute_similarity(features_a, features_b)
+        _increment_counter()
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"Comparison failed: {str(e)}"}), 500
     finally:
@@ -108,7 +128,9 @@ def compare_mixed():
 
         features_a = extract_features(path_a)
         features_b = extract_features(path_b)
-        return jsonify(compute_similarity(features_a, features_b))
+        result = compute_similarity(features_a, features_b)
+        _increment_counter()
+        return jsonify(result)
     except (ValueError, RuntimeError) as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:

@@ -1,7 +1,9 @@
 import { useState } from "react";
+import HeroSection from "./components/HeroSection";
 import SongInput from "./components/SongInput";
 import ResultsPanel from "./components/ResultsPanel";
 import Loader from "./components/Loader";
+import FunFacts from "./components/FunFacts";
 import Footer from "./components/Footer";
 import { useCompare } from "./hooks/useCompare";
 import type { InputMode, SearchQuery } from "./types";
@@ -52,7 +54,6 @@ export default function App() {
     reset();
   }
 
-  // Display names
   const songAName = mode === "file"
     ? (fileA?.name || "Song A")
     : (searchA.selectedTrack?.trackName || searchA.query || "Song A");
@@ -60,24 +61,12 @@ export default function App() {
     ? (fileB?.name || "Song B")
     : (searchB.selectedTrack?.trackName || searchB.query || "Song B");
 
-  // Album art URLs
   const songAArt = searchA.selectedTrack?.artworkUrl;
   const songBArt = searchB.selectedTrack?.artworkUrl;
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Hero / Header */}
-      <header className="pt-16 pb-8 text-center px-4">
-        <h1 className="text-4xl md:text-5xl font-bold tracking-tight bg-gradient-to-r from-brand-400 to-emerald-300 bg-clip-text text-transparent">
-          MelodyMatch
-        </h1>
-        <p className="mt-3 text-lg text-gray-400 max-w-md mx-auto">
-          Compare songs. Discover similarity.
-        </p>
-        <p className="mt-1 text-sm text-gray-600 max-w-sm mx-auto">
-          Search for any two songs to see how similar they are across rhythm, tempo, timbre, and harmony.
-        </p>
-      </header>
+      <HeroSection />
 
       {/* Main content */}
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 pb-12">
@@ -181,6 +170,9 @@ export default function App() {
             onReset={handleReset}
           />
         )}
+
+        {/* Fun facts — shown when idle */}
+        {status === "idle" && <FunFacts />}
       </main>
 
       <Footer />
