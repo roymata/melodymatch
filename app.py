@@ -5,6 +5,7 @@ Includes SSE streaming endpoint for real-time progress updates.
 """
 
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -19,6 +20,8 @@ from analyzer import extract_features, compute_similarity
 from lyrics import fetch_lyrics, compute_lyrics_similarity
 from youtube import search_and_download, download_from_url
 
+log = logging.getLogger(__name__)
+
 # Serve built React app from /static (built during Docker build)
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -28,13 +31,48 @@ CORS(app)
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
 
-# ── Comparison counter (in-memory, resets on redeploy) ─────────────────────
+# ── Persistent comparison counter (Redis → in-memory fallback) ────────────
+_redis_client = None
+_REDIS_COUNTER_KEY = "melodymatch:comparisons"
+
+_redis_url = os.environ.get("REDIS_URL") or os.environ.get("UPSTASH_REDIS_URL")
+if _redis_url:
+    try:
+        import redis
+        _redis_client = redis.from_url(_redis_url, decode_responses=True)
+        _redis_client.ping()
+        log.info("Redis connected — counter is persistent.")
+    except Exception as exc:
+        log.warning("Redis connection failed (%s) — falling back to in-memory counter.", exc)
+        _redis_client = None
+else:
+    log.info("No REDIS_URL set — using in-memory counter (resets on redeploy).")
+
+# In-memory fallback
 _counter_lock = threading.Lock()
 _comparison_count = 0
 
 
+def _get_counter() -> int:
+    """Read the current comparison count."""
+    if _redis_client:
+        try:
+            val = _redis_client.get(_REDIS_COUNTER_KEY)
+            return int(val) if val else 0
+        except Exception:
+            pass
+    return _comparison_count
+
+
 def _increment_counter():
+    """Increment the comparison count (Redis or in-memory)."""
     global _comparison_count
+    if _redis_client:
+        try:
+            _redis_client.incr(_REDIS_COUNTER_KEY)
+            return
+        except Exception:
+            pass
     with _counter_lock:
         _comparison_count += 1
 
@@ -87,7 +125,7 @@ def health():
 @app.route("/api/stats")
 def stats():
     """Return comparison counter for the frontend."""
-    return jsonify({"comparisons": _comparison_count})
+    return jsonify({"comparisons": _get_counter()})
 
 
 @app.route("/api/compare", methods=["POST"])
