@@ -284,9 +284,12 @@ export default function Loader({
       </div>
 
       {/* Elapsed time */}
-      <p className="text-xs text-gray-500 mb-6">
+      <p className="text-xs text-gray-500 mb-1.5">
         <span className="inline-block w-4 text-center">&#9201;</span>{" "}
         {formatElapsed(elapsed)} elapsed
+      </p>
+      <p className="text-[11px] text-gray-600 mb-6">
+        Analysis typically takes 30–90 seconds on our free tier
       </p>
 
       {/* Rotating fun fact */}
