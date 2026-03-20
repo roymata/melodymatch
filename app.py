@@ -214,9 +214,8 @@ def compare_mixed_stream():
     Sends progress events as each step completes:
       searching (5%)        → downloading songs + fetching lyrics in parallel
       fetching_lyrics (20%) → lyrics comparison computed
-      analyzing_a (30%)     → extracting audio features for song A
-      analyzing_b (55%)     → extracting audio features for song B
-      comparing (90%)       → computing similarity
+      analyzing (30%)       → extracting audio features for BOTH songs in parallel
+      comparing (85%)       → computing similarity
       done (100%)           → final result
     """
     data = request.get_json(silent=True)
@@ -249,16 +248,16 @@ def compare_mixed_stream():
             yield _sse_event("fetching_lyrics", 20)
             lyrics_sim = compute_lyrics_similarity(lyrics_a, lyrics_b)
 
-            # Step 3: Analyze Song A audio
-            yield _sse_event("analyzing_a", 30)
-            features_a = extract_features(path_a)
+            # Step 3: Analyze BOTH songs in parallel (biggest speedup)
+            yield _sse_event("analyzing", 30)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_a = pool.submit(extract_features, path_a)
+                fut_b = pool.submit(extract_features, path_b)
+                features_a = fut_a.result(timeout=120)
+                features_b = fut_b.result(timeout=120)
 
-            # Step 4: Analyze Song B audio
-            yield _sse_event("analyzing_b", 55)
-            features_b = extract_features(path_b)
-
-            # Step 5: Compute overall similarity
-            yield _sse_event("comparing", 90)
+            # Step 4: Compute overall similarity
+            yield _sse_event("comparing", 85)
             result = compute_similarity(features_a, features_b, lyrics_sim=lyrics_sim)
             _increment_counter()
 

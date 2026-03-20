@@ -19,11 +19,6 @@ const TIPS = [
   { emoji: "🥁", text: "Onset detection finds every beat — even subtle ones humans might miss." },
 ];
 
-/** Truncate a name so the step labels don't overflow. */
-function truncate(s: string, max = 24): string {
-  return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
-}
-
 function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
@@ -133,7 +128,10 @@ export default function Loader({
 }: LoaderProps) {
   const [elapsed, setElapsed] = useState(0);
   const [tipIndex, setTipIndex] = useState(0);
+  const [displayPercent, setDisplayPercent] = useState(0);
   const startRef = useRef(Date.now());
+  const animFrameRef = useRef<number>(0);
+  const lastServerPercent = useRef(0);
 
   // Elapsed timer
   useEffect(() => {
@@ -151,6 +149,46 @@ export default function Loader({
     }, 6000);
     return () => clearInterval(id);
   }, []);
+
+  // Smooth progress animation: glides toward the next expected milestone
+  // so the bar never appears stuck even during long server-side operations
+  useEffect(() => {
+    lastServerPercent.current = progress.percent;
+  }, [progress.percent]);
+
+  useEffect(() => {
+    let start = performance.now();
+    let from = displayPercent;
+    const target = progress.percent;
+    // Max we'll creep toward during an active step (don't overshoot server)
+    const ceiling =
+      progress.step === "analyzing" ? 80 :
+      progress.step === "searching" ? 18 :
+      progress.step === "fetching_lyrics" ? 28 :
+      target;
+
+    const animate = (now: number) => {
+      const dt = (now - start) / 1000; // seconds elapsed
+
+      if (from < target) {
+        // Quick catch-up to the server's reported value
+        const catchUp = from + (target - from) * Math.min(1, dt * 3);
+        setDisplayPercent(Math.round(Math.min(catchUp, target)));
+      } else if (target < ceiling) {
+        // Synthetic creep: slowly advance 1% every ~2s toward ceiling
+        const crept = target + dt * 0.5;
+        setDisplayPercent(Math.round(Math.min(crept, ceiling)));
+      } else {
+        setDisplayPercent(Math.round(target));
+      }
+
+      animFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animFrameRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animFrameRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress.percent, progress.step]);
 
   // ── File-upload fallback (simple spinner) ──
   if (status === "uploading" || status === "analyzing") {
@@ -192,8 +230,8 @@ export default function Loader({
   }
 
   // ── Streaming mode: interactive step-by-step loader ──
-  const nameA = truncate(songAName);
-  const nameB = truncate(songBName);
+  const nameA = songAName.length > 24 ? songAName.slice(0, 23) + "\u2026" : songAName;
+  const nameB = songBName.length > 24 ? songBName.slice(0, 23) + "\u2026" : songBName;
 
   const steps = [
     {
@@ -209,16 +247,10 @@ export default function Loader({
       doneLabel: "Lyrics fetched",
     },
     {
-      key: "analyzing_a",
+      key: "analyzing",
       icon: "🧬",
-      activeLabel: `Analyzing "${nameA}"`,
-      doneLabel: `Analyzed "${nameA}"`,
-    },
-    {
-      key: "analyzing_b",
-      icon: "🧬",
-      activeLabel: `Analyzing "${nameB}"`,
-      doneLabel: `Analyzed "${nameB}"`,
+      activeLabel: `Analyzing "${nameA}" & "${nameB}"`,
+      doneLabel: "Audio analyzed",
     },
     {
       key: "comparing",
@@ -231,6 +263,7 @@ export default function Loader({
   const stepKeys = steps.map((s) => s.key);
   const currentIndex = stepKeys.indexOf(progress.step);
 
+  const shown = Math.min(displayPercent, 100);
   const tip = TIPS[tipIndex];
 
   return (
@@ -247,7 +280,6 @@ export default function Loader({
       {/* Steps timeline */}
       <div className="w-full max-w-sm space-y-2 mb-8">
         {steps.map((step, i) => {
-          // Mark all complete when we reach "done"
           const isAllDone = progress.step === "done";
           const isActive = !isAllDone && i === currentIndex;
           const isDone = isAllDone || i < currentIndex;
@@ -269,13 +301,13 @@ export default function Loader({
       <div className="w-full max-w-sm mb-5">
         <div className="flex justify-between text-xs text-gray-500 mb-1.5">
           <span>Progress</span>
-          <span>{Math.min(progress.percent, 100)}%</span>
+          <span>{shown}%</span>
         </div>
         <div className="h-2 bg-gray-800/80 rounded-full overflow-hidden">
           <div
-            className="h-full rounded-full transition-all duration-700 ease-out"
+            className="h-full rounded-full transition-all duration-500 ease-out"
             style={{
-              width: `${Math.min(progress.percent, 100)}%`,
+              width: `${shown}%`,
               background:
                 "linear-gradient(90deg, #22c55e 0%, #4ade80 50%, #34d399 100%)",
             }}
@@ -289,7 +321,7 @@ export default function Loader({
         {formatElapsed(elapsed)} elapsed
       </p>
       <p className="text-[11px] text-gray-600 mb-6">
-        Analysis typically takes 30–90 seconds on our free tier
+        Analysis typically takes 15–45 seconds
       </p>
 
       {/* Rotating fun fact */}

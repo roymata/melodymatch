@@ -1,12 +1,12 @@
 """Audio feature extraction and similarity computation using librosa.
 
 PERFORMANCE-OPTIMIZED for Render free tier (0.1 CPU / 512 MB RAM):
-- 15 seconds of audio (iTunes previews are 30s, 15s is plenty for features)
-- 16 kHz sample rate (down from 22050 — still captures all music-relevant frequencies)
+- 10 seconds of audio (iTunes previews are 30s, 10s captures enough structure)
+- 11025 Hz sample rate (half of 22050 — still covers all music-relevant frequencies)
 - hop_length=1024 (double default — halves the number of frames to process)
 - 14 MFCCs (drop [0]) instead of 20 — still captures timbre accurately
 - chroma_stft instead of chroma_cens (much faster, nearly as good for comparison)
-- Combined: ~10-15x faster than the original 60s/22050Hz/512hop configuration
+- Combined: ~20x faster than the original 60s/22050Hz/512hop configuration
 
 Key design choices for accurate similarity:
 - Use Euclidean distance (not cosine) — cosine on music feature means gives
@@ -30,12 +30,12 @@ from scipy.stats import pearsonr
 # Feature extraction (optimized for speed)
 # ---------------------------------------------------------------------------
 
-def extract_features(file_path: str, sr: int = 16000, duration: float = 15.0) -> dict:
+def extract_features(file_path: str, sr: int = 11025, duration: float = 10.0) -> dict:
     """Extract a rich set of audio features from a file.
 
     Optimized defaults:
-      sr=16000      — 27% less data vs 22050, still covers all music frequencies
-      duration=15.0 — 75% less data vs 60s, 15s captures enough structure
+      sr=11025      — 50% less data vs 22050, still covers all music frequencies
+      duration=10.0 — 83% less data vs 60s, 10s captures enough structure
       hop_length=1024 — 50% fewer frames vs default 512
 
     Returns means, stds, and temporal data for accurate comparison.

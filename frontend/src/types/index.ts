@@ -56,8 +56,7 @@ export interface MixedSongInput {
 export type ProgressStep =
   | "searching"
   | "fetching_lyrics"
-  | "analyzing_a"
-  | "analyzing_b"
+  | "analyzing"
   | "comparing"
   | "done"
   | "error";
