@@ -146,8 +146,14 @@ def _rhythm_similarity(onset_a: np.ndarray, onset_b: np.ndarray) -> float:
         return 50.0
 
 
-def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
-    """Compute per-dimension and overall similarity between two feature sets."""
+def compute_similarity(feat_a: dict, feat_b: dict, lyrics_sim: float | None = None) -> dict:
+    """Compute per-dimension and overall similarity between two feature sets.
+
+    Args:
+        feat_a, feat_b: Audio feature dicts from extract_features().
+        lyrics_sim: Optional lyrics similarity score (0-100) from
+                    compute_lyrics_similarity(). None if unavailable.
+    """
 
     # --- Rhythm ---
     rhythm_sim = _rhythm_similarity(
@@ -167,13 +173,11 @@ def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
         feat_b["mfcc_mean"], feat_b["mfcc_std"],
         feat_b["spectral_contrast_mean"], feat_b["spectral_contrast_std"],
     ])
-    # Scale=20: adjusted for 40-dim vector (was 25 for 52-dim)
     timbre_sim = _euclidean_similarity(timbre_a, timbre_b, scale=20)
 
     # --- Harmony (chroma STFT mean+std) ---
     harmony_a = np.concatenate([feat_a["chroma_mean"], feat_a["chroma_std"]])
     harmony_b = np.concatenate([feat_b["chroma_mean"], feat_b["chroma_std"]])
-    # Scale=2.0: adjusted for chroma_stft (slightly different distribution than CENS)
     harmony_sim = _euclidean_similarity(harmony_a, harmony_b, scale=2.0)
 
     # --- Spectral character ---
@@ -195,14 +199,28 @@ def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
     ])
     spectral_sim = _euclidean_similarity(spectral_a, spectral_b, scale=0.8)
 
-    # --- Weighted overall score ---
-    overall = (
-        0.15 * rhythm_sim
-        + 0.10 * tempo_sim
-        + 0.35 * timbre_sim
-        + 0.25 * harmony_sim
-        + 0.15 * spectral_sim
-    )
+    # --- Weighted overall score (lyrics dimension is optional) ---
+    base_weights = {
+        "rhythm":   0.15,
+        "tempo":    0.10,
+        "timbre":   0.30,
+        "harmony":  0.20,
+        "spectral": 0.15,
+        "lyrics":   0.10,
+    }
+    scores = {
+        "rhythm":   rhythm_sim,
+        "tempo":    tempo_sim,
+        "timbre":   timbre_sim,
+        "harmony":  harmony_sim,
+        "spectral": spectral_sim,
+        "lyrics":   lyrics_sim,  # may be None
+    }
+
+    # Filter out None dimensions and renormalize weights to sum to 1.0
+    active = {k: v for k, v in scores.items() if v is not None}
+    total_weight = sum(base_weights[k] for k in active)
+    overall = sum(base_weights[k] / total_weight * active[k] for k in active)
 
     return {
         "overall": round(overall, 1),
@@ -211,6 +229,7 @@ def compute_similarity(feat_a: dict, feat_b: dict) -> dict:
             "tempo": round(tempo_sim, 1),
             "timbre": round(timbre_sim, 1),
             "harmony": round(harmony_sim, 1),
+            "lyrics": round(lyrics_sim, 1) if lyrics_sim is not None else None,
         },
         "details": {
             "song_a": {

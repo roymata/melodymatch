@@ -203,6 +203,12 @@ export default function Loader({
       doneLabel: "Songs found",
     },
     {
+      key: "fetching_lyrics",
+      icon: "📝",
+      activeLabel: "Fetching lyrics",
+      doneLabel: "Lyrics fetched",
+    },
+    {
       key: "analyzing_a",
       icon: "🧬",
       activeLabel: `Analyzing "${nameA}"`,

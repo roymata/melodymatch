@@ -3,6 +3,7 @@ export interface SimilarityBreakdown {
   tempo: number;
   timbre: number;
   harmony: number;
+  lyrics: number | null;
 }
 
 export interface SongDetails {
@@ -54,6 +55,7 @@ export interface MixedSongInput {
 /** SSE progress step names from the streaming endpoint. */
 export type ProgressStep =
   | "searching"
+  | "fetching_lyrics"
   | "analyzing_a"
   | "analyzing_b"
   | "comparing"

@@ -16,6 +16,7 @@ from flask import Flask, request, jsonify, send_from_directory, Response, stream
 from flask_cors import CORS
 
 from analyzer import extract_features, compute_similarity
+from lyrics import fetch_lyrics, compute_lyrics_similarity
 from youtube import search_and_download, download_from_url
 
 # Serve built React app from /static (built during Docker build)
@@ -136,12 +137,28 @@ def compare_mixed():
 
     path_a = path_b = None
     try:
-        path_a = _resolve_song(data["song_a"])
-        path_b = _resolve_song(data["song_b"])
+        # Download audio + fetch lyrics in parallel
+        name_a = (data["song_a"].get("name") or "").strip()
+        artist_a = (data["song_a"].get("artist") or "").strip()
+        name_b = (data["song_b"].get("name") or "").strip()
+        artist_b = (data["song_b"].get("artist") or "").strip()
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            fut_audio_a = pool.submit(_resolve_song, data["song_a"])
+            fut_audio_b = pool.submit(_resolve_song, data["song_b"])
+            fut_lyrics_a = pool.submit(fetch_lyrics, name_a, artist_a)
+            fut_lyrics_b = pool.submit(fetch_lyrics, name_b, artist_b)
+
+            path_a = fut_audio_a.result(timeout=60)
+            path_b = fut_audio_b.result(timeout=60)
+            lyrics_sim = compute_lyrics_similarity(
+                fut_lyrics_a.result(timeout=15),
+                fut_lyrics_b.result(timeout=15),
+            )
 
         features_a = extract_features(path_a)
         features_b = extract_features(path_b)
-        result = compute_similarity(features_a, features_b)
+        result = compute_similarity(features_a, features_b, lyrics_sim=lyrics_sim)
         _increment_counter()
         return jsonify(result)
     except (ValueError, RuntimeError) as e:
@@ -157,11 +174,12 @@ def compare_mixed_stream():
     """Compare two songs with real-time SSE progress streaming.
 
     Sends progress events as each step completes:
-      searching (5%)  → downloading songs in parallel
-      analyzing_a (25%) → extracting features for song A
-      analyzing_b (55%) → extracting features for song B
-      comparing (90%)   → computing similarity
-      done (100%)       → final result
+      searching (5%)        → downloading songs + fetching lyrics in parallel
+      fetching_lyrics (20%) → lyrics comparison computed
+      analyzing_a (30%)     → extracting audio features for song A
+      analyzing_b (55%)     → extracting audio features for song B
+      comparing (90%)       → computing similarity
+      done (100%)           → final result
     """
     data = request.get_json(silent=True)
     if not data or "song_a" not in data or "song_b" not in data:
@@ -170,26 +188,40 @@ def compare_mixed_stream():
     def generate():
         path_a = path_b = None
         try:
-            # Step 1: Download both songs in parallel
+            # Step 1: Download audio + fetch lyrics in parallel
             yield _sse_event("searching", 5)
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                future_a = pool.submit(_resolve_song, data["song_a"])
-                future_b = pool.submit(_resolve_song, data["song_b"])
-                path_a = future_a.result(timeout=60)
-                path_b = future_b.result(timeout=60)
+            name_a = (data["song_a"].get("name") or "").strip()
+            artist_a = (data["song_a"].get("artist") or "").strip()
+            name_b = (data["song_b"].get("name") or "").strip()
+            artist_b = (data["song_b"].get("artist") or "").strip()
 
-            # Step 2: Analyze Song A
-            yield _sse_event("analyzing_a", 25)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                future_audio_a = pool.submit(_resolve_song, data["song_a"])
+                future_audio_b = pool.submit(_resolve_song, data["song_b"])
+                future_lyrics_a = pool.submit(fetch_lyrics, name_a, artist_a)
+                future_lyrics_b = pool.submit(fetch_lyrics, name_b, artist_b)
+
+                path_a = future_audio_a.result(timeout=60)
+                path_b = future_audio_b.result(timeout=60)
+                lyrics_a = future_lyrics_a.result(timeout=15)
+                lyrics_b = future_lyrics_b.result(timeout=15)
+
+            # Step 2: Compute lyrics similarity (instant — pure text math)
+            yield _sse_event("fetching_lyrics", 20)
+            lyrics_sim = compute_lyrics_similarity(lyrics_a, lyrics_b)
+
+            # Step 3: Analyze Song A audio
+            yield _sse_event("analyzing_a", 30)
             features_a = extract_features(path_a)
 
-            # Step 3: Analyze Song B
+            # Step 4: Analyze Song B audio
             yield _sse_event("analyzing_b", 55)
             features_b = extract_features(path_b)
 
-            # Step 4: Compute similarity
+            # Step 5: Compute overall similarity
             yield _sse_event("comparing", 90)
-            result = compute_similarity(features_a, features_b)
+            result = compute_similarity(features_a, features_b, lyrics_sim=lyrics_sim)
             _increment_counter()
 
             # Done!

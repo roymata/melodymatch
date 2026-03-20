@@ -16,6 +16,7 @@ const BREAKDOWN_META: Record<string, { label: string; description: string }> = {
   tempo: { label: "Tempo", description: "BPM comparison" },
   timbre: { label: "Timbre", description: "Tonal quality & texture" },
   harmony: { label: "Harmony", description: "Pitch & chord content" },
+  lyrics: { label: "Lyrics", description: "Word similarity" },
 };
 
 function AlbumArt({ src }: { src?: string }) {
