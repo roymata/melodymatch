@@ -232,14 +232,17 @@ def _estimate_tempo(onset_env: np.ndarray, sr: int, hop: int) -> float:
     best_bpm = 60.0 * fps / refined_lag if refined_lag > 0 else 120.0
 
     # ── Octave-error fix ────────────────────────────────────────────────
+    doubled = False
+
     # Rule 1: BPM below 55 is almost unheard of in Western music.
     # Force-double unconditionally — it's virtually always an octave error.
     if best_bpm < 55 and best_bpm * 2 <= 200:
         best_bpm *= 2
+        doubled = True
 
     # Rule 2: BPM 55-100 — double if onset midpoints have real beats.
-    # More conservative: uses actual onset peaks to verify.
-    if best_bpm < 100 and best_bpm * 2 <= 200:
+    # Only applies if Rule 1 didn't already double.
+    if not doubled and best_bpm < 100 and best_bpm * 2 <= 200:
         single_period = fps / (best_bpm / 60)  # frames per detected beat
         n_checks = min(30, int(len(onset_env) / single_period) - 1)
 
@@ -261,9 +264,9 @@ def _estimate_tempo(onset_env: np.ndarray, sr: int, hop: int) -> float:
             if beat_strengths and mid_strengths:
                 beat_avg = np.mean(beat_strengths)
                 mid_avg = np.mean(mid_strengths)
-                # Lower threshold (0.25) — for songs with smooth texture
-                # like "Torn" where onsets are subtle
-                if beat_avg > 0 and mid_avg > beat_avg * 0.25:
+                # If midpoints have >= 40% the strength of on-beats,
+                # there are real beats there → true tempo is double
+                if beat_avg > 0 and mid_avg > beat_avg * 0.4:
                     best_bpm *= 2
 
     # Rule 3: If still below 70 after doubling, try tripling
