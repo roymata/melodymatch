@@ -32,9 +32,10 @@ CORS(app)
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac"}
 
-# ── Persistent comparison counter (Redis → in-memory fallback) ────────────
+# ── Persistent comparison counter (Redis → file → in-memory fallback) ─────
 _redis_client = None
 _REDIS_COUNTER_KEY = "melodymatch:comparisons"
+_COUNTER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".counter")
 
 _redis_url = os.environ.get("REDIS_URL") or os.environ.get("UPSTASH_REDIS_URL")
 if _redis_url:
@@ -44,30 +45,32 @@ if _redis_url:
         _redis_client.ping()
         log.info("Redis connected — counter is persistent.")
     except Exception as exc:
-        log.warning("Redis connection failed (%s) — falling back to in-memory counter.", exc)
+        log.warning("Redis connection failed (%s) — falling back to file counter.", exc)
         _redis_client = None
 else:
-    log.info("No REDIS_URL set — using in-memory counter (resets on redeploy).")
+    log.info("No REDIS_URL set — using file-based counter (%s).", _COUNTER_FILE)
 
-# In-memory fallback
 _counter_lock = threading.Lock()
-_comparison_count = 0
 
 
 def _get_counter() -> int:
-    """Read the current comparison count."""
+    """Read the current comparison count (Redis → file fallback)."""
     if _redis_client:
         try:
             val = _redis_client.get(_REDIS_COUNTER_KEY)
             return int(val) if val else 0
         except Exception:
             pass
-    return _comparison_count
+    # File-based fallback — persists across cold starts within same deploy
+    try:
+        with open(_COUNTER_FILE, "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
 
 
 def _increment_counter():
-    """Increment the comparison count (Redis or in-memory)."""
-    global _comparison_count
+    """Increment the comparison count (Redis → file fallback)."""
     if _redis_client:
         try:
             _redis_client.incr(_REDIS_COUNTER_KEY)
@@ -75,7 +78,12 @@ def _increment_counter():
         except Exception:
             pass
     with _counter_lock:
-        _comparison_count += 1
+        count = _get_counter() + 1
+        try:
+            with open(_COUNTER_FILE, "w") as f:
+                f.write(str(count))
+        except Exception:
+            pass
 
 
 def _allowed_file(filename: str) -> bool:
