@@ -166,13 +166,17 @@ def _parabolic_interp(ac: np.ndarray, idx: int) -> float:
 
 
 def _estimate_tempo(onset_env: np.ndarray, sr: int, hop: int) -> float:
-    """Estimate BPM using autocorrelation with octave-error correction.
+    """Estimate BPM using autocorrelation with aggressive octave-error correction.
 
-    Key improvements for accuracy:
-    - Uses the full onset envelope (30s preview → ~130 frames at hop=256)
-    - Smooths onset envelope to reduce noise
-    - Finds top 3 autocorrelation peaks, checks for octave relationships
-    - Parabolic interpolation for sub-lag BPM precision
+    The #1 failure mode in tempo detection is octave errors: the algorithm
+    finds 70 BPM when the real tempo is 140 BPM (or vice versa). This happens
+    because the autocorrelation at 2× the period is always strong (every other
+    beat matches perfectly).
+
+    Fix: find the strongest peak, then ALWAYS check the double-tempo candidate
+    (half lag). If the double-tempo has any autocorrelation support AND falls
+    in the common 70-180 BPM range, prefer it — because humans almost always
+    perceive the faster pulse as "the tempo".
     """
     if len(onset_env) < 40:
         return 120.0
@@ -208,40 +212,81 @@ def _estimate_tempo(onset_env: np.ndarray, sr: int, hop: int) -> float:
 
     ac_range = ac[min_lag: max_lag + 1]
 
-    # Find top 3 peaks for octave-error checking
-    from scipy.signal import find_peaks as _find_peaks
-    peaks, props = _find_peaks(ac_range, distance=3, prominence=0.01)
+    # Weight autocorrelation to suppress very slow tempos (<60 BPM)
+    # which are almost always octave errors (4× or 8× the real period).
+    # Keep 60-200 BPM roughly neutral to not bias the initial pick.
+    weights = np.ones(len(ac_range), dtype=np.float64)
+    for i in range(len(ac_range)):
+        lag = i + min_lag
+        bpm = 60.0 * fps / lag
+        if bpm < 55:
+            weights[i] = 0.2   # heavily suppress: almost never real
+        elif bpm > 200:
+            weights[i] = 0.3   # suppress very fast tempos
 
-    if len(peaks) == 0:
-        # Fallback: just use argmax
-        peak_idx = np.argmax(ac_range) + min_lag
-        refined = _parabolic_interp(ac, peak_idx)
-        tempo = 60.0 * fps / refined if refined > 0 else 120.0
-        return round(max(40, min(220, tempo)), 1)
+    weighted = ac_range * weights
+    best_offset = int(np.argmax(weighted))
+    best_lag = best_offset + min_lag
 
-    # Sort peaks by autocorrelation strength
-    sorted_peaks = peaks[np.argsort(-ac_range[peaks])][:5]
-    candidates = []
-    for p in sorted_peaks:
-        abs_idx = p + min_lag
-        refined = _parabolic_interp(ac, abs_idx)
-        if refined > 0:
-            bpm = 60.0 * fps / refined
-            if 40 <= bpm <= 220:
-                candidates.append((bpm, float(ac_range[p])))
+    refined_lag = _parabolic_interp(ac, best_lag)
+    best_bpm = 60.0 * fps / refined_lag if refined_lag > 0 else 120.0
 
-    if not candidates:
+    # ── Octave-error fix: check if the true tempo is DOUBLE ──────────────
+    # For a 170 BPM signal, autocorrelation often picks 85 BPM (half tempo)
+    # because every-other-beat alignment is just as strong. To detect this:
+    # check if there are real onset peaks BETWEEN the detected beats.
+    # If the midpoints have strong onsets, the true tempo is double.
+    if best_bpm < 100 and best_bpm * 2 <= 200:
+        single_period = fps / (best_bpm / 60)  # frames per detected beat
+        n_checks = min(30, int(len(onset_env) / single_period) - 1)
+
+        if n_checks >= 4:
+            beat_strengths = []
+            mid_strengths = []
+            for i in range(n_checks):
+                beat_pos = int(i * single_period)
+                mid_pos = int((i + 0.5) * single_period)
+                if beat_pos < len(onset_env):
+                    lo = max(0, beat_pos - 2)
+                    hi = min(len(onset_env), beat_pos + 3)
+                    beat_strengths.append(float(np.max(onset_env[lo:hi])))
+                if mid_pos < len(onset_env):
+                    lo = max(0, mid_pos - 2)
+                    hi = min(len(onset_env), mid_pos + 3)
+                    mid_strengths.append(float(np.max(onset_env[lo:hi])))
+
+            if beat_strengths and mid_strengths:
+                beat_avg = np.mean(beat_strengths)
+                mid_avg = np.mean(mid_strengths)
+                # If midpoints have >= 40% the strength of on-beats,
+                # there are real beats there → true tempo is double
+                if beat_avg > 0 and mid_avg > beat_avg * 0.4:
+                    best_bpm *= 2
+
+    # Also check tripling for very slow detections (handles 3× period errors)
+    if best_bpm < 70 and best_bpm * 3 <= 200:
+        triple_period = fps / (best_bpm * 3 / 60)
+        n_checks = min(30, int(len(onset_env) / triple_period) - 1)
+        if n_checks >= 4:
+            strengths = []
+            for i in range(n_checks):
+                pos = int(i * triple_period)
+                if pos < len(onset_env):
+                    lo = max(0, pos - 2)
+                    hi = min(len(onset_env), pos + 3)
+                    strengths.append(float(np.max(onset_env[lo:hi])))
+            if strengths and np.mean(strengths) > 0.1 * np.max(onset_env):
+                best_bpm *= 3
+
+    # Safety: if somehow > 200, halve
+    if best_bpm > 200:
+        half_bpm = best_bpm / 2
+        if 60 <= half_bpm <= 160:
+            best_bpm = half_bpm
+
+    # Sanity bounds
+    if best_bpm < 40 or best_bpm > 220:
         return 120.0
-
-    # Prefer tempos in the common 80-160 BPM range (perceptual preference)
-    best_bpm = candidates[0][0]
-    best_score = candidates[0][1]
-    for bpm, score in candidates:
-        # Boost score for tempos in the common range
-        adjusted = score * (1.3 if 80 <= bpm <= 160 else 1.0)
-        if adjusted > best_score * 1.05:
-            best_bpm = bpm
-            best_score = adjusted
 
     return round(best_bpm, 1)
 
