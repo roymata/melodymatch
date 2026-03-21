@@ -1,6 +1,8 @@
+import { useState } from "react";
 import type { ComparisonResult } from "../types";
 import ScoreRing from "./ScoreRing";
 import BreakdownBar from "./BreakdownBar";
+import { shareResults } from "../utils/shareCard";
 
 interface ResultsPanelProps {
   result: ComparisonResult;
@@ -29,6 +31,60 @@ function AlbumArt({ src }: { src?: string }) {
         <path strokeLinecap="round" strokeLinejoin="round" d="m9 9 10.5-3m0 6.553v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 1 1-.99-3.467l2.31-.66a2.25 2.25 0 0 0 1.632-2.163Zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 0 1-.99-3.467l2.31-.66A2.25 2.25 0 0 0 9 15.553Z" />
       </svg>
     </div>
+  );
+}
+
+function ShareButton({
+  result,
+  songAName,
+  songBName,
+}: {
+  result: ComparisonResult;
+  songAName: string;
+  songBName: string;
+}) {
+  const [sharing, setSharing] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const handleShare = async () => {
+    setSharing(true);
+    try {
+      await shareResults(result, songAName, songBName);
+      setDone(true);
+      setTimeout(() => setDone(false), 2000);
+    } catch {
+      // silently ignore
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleShare}
+      disabled={sharing}
+      className="px-5 py-2.5 rounded-xl bg-brand-600 text-white text-sm font-medium
+                 hover:bg-brand-500 transition-colors disabled:opacity-50 flex items-center gap-2"
+    >
+      {done ? (
+        <>
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Saved!
+        </>
+      ) : sharing ? (
+        "Generating..."
+      ) : (
+        <>
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M7.217 10.907a2.25 2.25 0 1 0 0 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186 9.566-5.314m-9.566 7.5 9.566 5.314m0 0a2.25 2.25 0 1 0 3.935 2.186 2.25 2.25 0 0 0-3.935-2.186Zm0-12.814a2.25 2.25 0 1 0 3.933-2.185 2.25 2.25 0 0 0-3.933 2.185Z" />
+          </svg>
+          Share
+        </>
+      )}
+    </button>
   );
 }
 
@@ -77,8 +133,8 @@ export default function ResultsPanel({
         })}
       </div>
 
-      {/* CTA */}
-      <div className="flex justify-center pt-4">
+      {/* Actions */}
+      <div className="flex justify-center gap-3 pt-4">
         <button
           onClick={onReset}
           className="px-6 py-2.5 rounded-xl bg-gray-800 text-gray-300 text-sm font-medium
@@ -86,6 +142,11 @@ export default function ResultsPanel({
         >
           Compare Another Pair
         </button>
+        <ShareButton
+          result={result}
+          songAName={songAName}
+          songBName={songBName}
+        />
       </div>
     </div>
   );
