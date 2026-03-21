@@ -18,6 +18,7 @@ from flask import Flask, request, jsonify, send_from_directory, Response, stream
 from flask_cors import CORS
 
 from analyzer import extract_features, compute_similarity
+from bpm_lookup import fetch_bpm
 from lyrics import fetch_lyrics, compute_lyrics_similarity
 from youtube import search_and_download, download_from_url
 
@@ -242,16 +243,21 @@ def compare_mixed_stream():
             name_b = (data["song_b"].get("name") or "").strip()
             artist_b = (data["song_b"].get("artist") or "").strip()
 
-            with ThreadPoolExecutor(max_workers=4) as pool:
+            with ThreadPoolExecutor(max_workers=6) as pool:
                 future_audio_a = pool.submit(_resolve_song, data["song_a"])
                 future_audio_b = pool.submit(_resolve_song, data["song_b"])
                 future_lyrics_a = pool.submit(fetch_lyrics, name_a, artist_a)
                 future_lyrics_b = pool.submit(fetch_lyrics, name_b, artist_b)
+                # Fetch authoritative BPM from songbpm.com in parallel
+                future_bpm_a = pool.submit(fetch_bpm, name_a, artist_a)
+                future_bpm_b = pool.submit(fetch_bpm, name_b, artist_b)
 
                 path_a = future_audio_a.result(timeout=60)
                 path_b = future_audio_b.result(timeout=60)
                 lyrics_a = future_lyrics_a.result(timeout=15)
                 lyrics_b = future_lyrics_b.result(timeout=15)
+                bpm_a = future_bpm_a.result(timeout=10)
+                bpm_b = future_bpm_b.result(timeout=10)
 
             # Step 2: Compute lyrics similarity (instant — pure text math)
             yield _sse_event("fetching_lyrics", 20)
@@ -270,6 +276,12 @@ def compare_mixed_stream():
                     yield _sse_event("analyzing", pct)
                 features_a = fut_a.result(timeout=0)
                 features_b = fut_b.result(timeout=0)
+
+            # Override tempo with songbpm.com data (authoritative source)
+            if bpm_a is not None:
+                features_a["tempo"] = bpm_a
+            if bpm_b is not None:
+                features_b["tempo"] = bpm_b
 
             # Step 4: Compute overall similarity
             yield _sse_event("comparing", 85)

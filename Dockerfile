@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py analyzer.py youtube.py lyrics.py ./
+COPY app.py analyzer.py youtube.py lyrics.py bpm_lookup.py ./
 
 # Copy built React app into /app/static
 COPY --from=frontend-build /frontend/dist ./static/
