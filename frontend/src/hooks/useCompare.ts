@@ -29,6 +29,43 @@ async function safeJson(res: Response) {
   }
 }
 
+/**
+ * Wake up the Render free-tier server before making the real request.
+ * Retries the health endpoint until it responds (up to ~60s).
+ */
+async function ensureServerAwake(
+  onWaking: () => void,
+): Promise<void> {
+  // Quick check — if health responds fast, server is already warm
+  try {
+    const fast = await fetch(`${API_URL}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (fast.ok) return; // warm!
+  } catch {
+    // Server is cold — enter wake-up loop
+  }
+
+  onWaking(); // show "waking up" in UI
+
+  const MAX_RETRIES = 15; // 15 × 4s = 60s max
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    await new Promise((r) => setTimeout(r, 4000));
+    try {
+      const res = await fetch(`${API_URL}/health`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) return; // server is awake
+    } catch {
+      // still waking up, keep trying
+    }
+  }
+
+  throw new Error(
+    "The server is taking too long to start. Please try again in a minute."
+  );
+}
+
 /** Build the mixed-endpoint payload for a single song. */
 function toMixedInput(search: SearchQuery): MixedSongInput {
   if (search.fallbackUrl?.trim()) {
@@ -85,12 +122,20 @@ export function useCompare() {
     setError(null);
     setProgress({ step: "searching", percent: 0 });
 
-    const payload = JSON.stringify({
-      song_a: toMixedInput(searchA),
-      song_b: toMixedInput(searchB),
-    });
-
     try {
+      // Wake up Render free-tier server if it's sleeping
+      await ensureServerAwake(() => {
+        setProgress({ step: "waking_up", percent: 0 });
+      });
+
+      // Server is awake — proceed with actual comparison
+      setProgress({ step: "searching", percent: 2 });
+
+      const payload = JSON.stringify({
+        song_a: toMixedInput(searchA),
+        song_b: toMixedInput(searchB),
+      });
+
       const res = await fetch(`${API_URL}/compare-mixed-stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

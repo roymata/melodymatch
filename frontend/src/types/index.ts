@@ -54,6 +54,7 @@ export interface MixedSongInput {
 
 /** SSE progress step names from the streaming endpoint. */
 export type ProgressStep =
+  | "waking_up"
   | "searching"
   | "fetching_lyrics"
   | "analyzing"

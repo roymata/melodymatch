@@ -129,6 +129,9 @@ export default function Loader({
   const [elapsed, setElapsed] = useState(0);
   const [tipIndex, setTipIndex] = useState(0);
   const startRef = useRef(Date.now());
+  const sawWakeUp = useRef(false);
+
+  if (progress.step === "waking_up") sawWakeUp.current = true;
 
   // Elapsed timer
   useEffect(() => {
@@ -191,6 +194,13 @@ export default function Loader({
   const nameB = songBName.length > 24 ? songBName.slice(0, 23) + "\u2026" : songBName;
 
   const steps = [
+    // Only show the wake-up step if the server needed waking
+    ...(sawWakeUp.current ? [{
+      key: "waking_up",
+      icon: "☁️",
+      activeLabel: "Waking up server (free tier)",
+      doneLabel: "Server ready",
+    }] : []),
     {
       key: "searching",
       icon: "🔍",
