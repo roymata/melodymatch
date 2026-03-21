@@ -240,9 +240,13 @@ def _estimate_tempo(onset_env: np.ndarray, sr: int, hop: int) -> float:
         best_bpm *= 2
         doubled = True
 
-    # Rule 2: BPM 55-100 — double if onset midpoints have real beats.
+    # Rule 2: BPM 55-75 — double if onset midpoints have real beats.
     # Only applies if Rule 1 didn't already double.
-    if not doubled and best_bpm < 100 and best_bpm * 2 <= 200:
+    # Threshold is 75 (not 100): tempos 75+ are common and valid (ballads,
+    # hip-hop, mid-tempo pop). Doubling them to 150-200 is almost always wrong.
+    # Songs like Torn (96), Under The Bridge (84), Baby One More Time (93)
+    # all have correct base detection — we must NOT double them.
+    if not doubled and best_bpm < 75 and best_bpm * 2 <= 200:
         single_period = fps / (best_bpm / 60)  # frames per detected beat
         n_checks = min(30, int(len(onset_env) / single_period) - 1)
 
