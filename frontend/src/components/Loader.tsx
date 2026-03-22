@@ -155,12 +155,12 @@ export default function Loader({
     return (
       <div className="flex flex-col items-center py-16 animate-fadeIn">
         <div className="relative w-20 h-20 mb-6">
-          <div className="absolute inset-0 rounded-full border-2 border-brand-500/30 animate-ping" />
-          <div className="absolute inset-2 rounded-full border-2 border-brand-400/50 animate-ping [animation-delay:150ms]" />
+          <div className="absolute inset-0 rounded-full border-2 border-accent-purple/30 animate-ping" />
+          <div className="absolute inset-2 rounded-full border-2 border-accent-pink/40 animate-ping [animation-delay:150ms]" />
           <div className="absolute inset-4 rounded-full border-2 border-brand-400 animate-pulse" />
           <div className="absolute inset-0 flex items-center justify-center">
             <svg
-              className="w-8 h-8 text-brand-400 animate-spin"
+              className="w-8 h-8 text-accent-purple animate-spin"
               fill="none"
               viewBox="0 0 24 24"
             >
@@ -276,7 +276,7 @@ export default function Loader({
             style={{
               width: `${shown}%`,
               background:
-                "linear-gradient(90deg, #22c55e 0%, #4ade80 50%, #34d399 100%)",
+                "linear-gradient(90deg, #a855f7 0%, #ec4899 40%, #22c55e 100%)",
             }}
           />
         </div>

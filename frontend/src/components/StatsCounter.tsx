@@ -7,20 +7,18 @@ export default function StatsCounter() {
   const [target, setTarget] = useState(0);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Fetch real count on mount
   useEffect(() => {
     fetch(`${API_URL}/stats`)
       .then((r) => r.json())
       .then((d) => setTarget(d.comparisons ?? 0))
-      .catch(() => setTarget(1247));
+      .catch(() => {});
   }, []);
 
-  // Animate counting up
   useEffect(() => {
     if (target === 0) return;
     if (animRef.current) clearInterval(animRef.current);
 
-    const duration = 1500; // ms
+    const duration = 1500;
     const steps = 40;
     const increment = target / steps;
     let current = 0;
@@ -43,9 +41,10 @@ export default function StatsCounter() {
   if (target === 0) return null;
 
   return (
-    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-500/10 border border-brand-500/20">
+    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full
+                    bg-white/[0.04] backdrop-blur-sm border border-accent-purple/20">
       <span className="text-lg">🔥</span>
-      <span className="text-sm font-semibold text-brand-400">
+      <span className="text-sm font-semibold font-display bg-gradient-to-r from-accent-purple to-accent-pink bg-clip-text text-transparent">
         {count.toLocaleString()}
       </span>
       <span className="text-xs text-gray-400">comparisons made</span>

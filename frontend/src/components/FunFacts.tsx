@@ -19,17 +19,17 @@ const FACTS = [
 export default function FunFacts() {
   return (
     <section className="mt-16 mb-8">
-      <h2 className="text-center text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6">
+      <h2 className="text-center text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 font-display">
         Did you know?
       </h2>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {FACTS.map((fact, i) => (
           <div
             key={i}
-            className="rounded-xl bg-gray-800/40 border border-gray-800 p-5 text-center"
+            className="glass-card p-5 text-center hover:shadow-glow-purple transition-all duration-300"
           >
-            <span className="text-2xl">{fact.emoji}</span>
-            <h3 className="mt-2 text-sm font-semibold text-gray-200">{fact.title}</h3>
+            <span className="text-3xl">{fact.emoji}</span>
+            <h3 className="mt-2 text-sm font-semibold text-gray-200 font-display">{fact.title}</h3>
             <p className="mt-1.5 text-xs text-gray-500 leading-relaxed">{fact.text}</p>
           </div>
         ))}

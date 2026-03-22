@@ -95,9 +95,9 @@ export default function SongInput({
       <div
         ref={dropdownRef}
         className={`
-          relative flex flex-col rounded-2xl border-2 border-dashed
-          px-5 py-5 transition-all duration-200
-          ${track ? "border-brand-500/50 bg-brand-500/5" : "border-gray-700 bg-gray-900/50"}
+          relative flex flex-col rounded-2xl
+          px-5 py-5 transition-all duration-300
+          ${track ? "glass-card border-accent-purple/30 shadow-glow-purple" : "glass-card"}
         `}
       >
         <p className="text-sm font-medium text-gray-300 mb-3 text-center">{label}</p>
@@ -140,9 +140,9 @@ export default function SongInput({
                 onChange={(e) => handleQueryChange(e.target.value)}
                 onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
                 placeholder="Search song or artist..."
-                className="w-full bg-gray-800/80 border border-gray-700 rounded-lg pl-9 pr-3 py-2.5 text-sm
+                className="w-full bg-white/[0.03] border border-white/[0.08] rounded-lg pl-9 pr-3 py-2.5 text-sm
                            text-gray-200 placeholder-gray-500 outline-none
-                           focus:border-brand-500/50 focus:ring-1 focus:ring-brand-500/25 transition-all"
+                           focus:border-accent-purple/40 focus:ring-1 focus:ring-accent-purple/20 transition-all"
               />
               {loading && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -154,7 +154,7 @@ export default function SongInput({
             {/* Suggestions dropdown */}
             {showDropdown && suggestions.length > 0 && (
               <div className="absolute left-0 right-0 top-[calc(100%-8px)] z-50 mx-3 mt-1
-                              bg-gray-800 border border-gray-700 rounded-xl shadow-2xl overflow-hidden animate-fadeIn">
+                              bg-gray-900/95 backdrop-blur-md border border-white/[0.08] rounded-xl shadow-2xl overflow-hidden animate-fadeIn">
                 {suggestions.map((s) => (
                   <button
                     key={s.trackId}
@@ -214,10 +214,10 @@ export default function SongInput({
       onDrop={handleDrop}
       onClick={() => fileInputRef.current?.click()}
       className={`
-        relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed
-        px-6 py-8 cursor-pointer transition-all duration-200
-        ${dragging ? "border-brand-400 bg-brand-400/10" : "border-gray-700 hover:border-gray-500 bg-gray-900/50"}
-        ${file ? "border-brand-500/50 bg-brand-500/5" : ""}
+        relative flex flex-col items-center justify-center rounded-2xl
+        px-6 py-8 cursor-pointer transition-all duration-300
+        ${dragging ? "glass-card border-brand-400/40 shadow-glow-green" : "glass-card"}
+        ${file ? "border-accent-purple/30 shadow-glow-purple" : ""}
       `}
     >
       <input
@@ -228,7 +228,7 @@ export default function SongInput({
         className="hidden"
       />
 
-      <div className="mb-3 text-gray-500">
+      <div className="mb-3 text-accent-purple/60">
         <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 8.25H7.5a2.25 2.25 0 0 0-2.25 2.25v9a2.25 2.25 0 0 0 2.25 2.25h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25H15m0-3-3-3m0 0-3 3m3-3V15" />
         </svg>
